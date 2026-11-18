@@ -1,0 +1,12 @@
+node_modules/
+.idea/
+dist/
+yalc.lock
+.yalc
+.eslintcache
+public/ffmpeg/
+
+# 需要可以放开,这个用的不多,不用记忆了
+.workbuddy-ai
+.workbuddy
+pnpm-lock.yaml

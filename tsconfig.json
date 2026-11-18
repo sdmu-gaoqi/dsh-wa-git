@@ -16,5 +16,6 @@
     "noEmitOnError": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src/index.ts", "src/git.ts", "src/host-context.ts"],
+  "exclude": ["src/client", "dist", "node_modules"]
 }

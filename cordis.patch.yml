@@ -6,4 +6,4 @@
 # relative path. `@wagq/dsh-git` is this package's main entry (→ dist/index.js).
 - insert:
     - id: wagq-dsh-git
-      name: @wagq/dsh-git
+      name: '@wagq/dsh-git'

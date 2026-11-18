@@ -1,28 +1,37 @@
 {
   "name": "@wagq/dsh-git",
-  "version": "0.1.0",
-  "description": "@wagq/dsh-git — a DeepSeek Harness plugin (webui template).",
+  "version": "0.2.0",
+  "description": "@wagq/dsh-git — 会话头部一枚 Git 图标按钮，点开是与 VS Code「源代码管理 / 图表」同构的 Git 面板（暂存、提交、提交图）。",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.md"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.4"
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "smoke": "node scripts/smoke.mjs",
+    "preview": "node scripts/preview.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.1.0"
@@ -30,6 +39,15 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.1.0",
     "@types/node": "^22.10.0",
-    "typescript": "^5.6.0"
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.2.2",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.65.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
   }
 }
