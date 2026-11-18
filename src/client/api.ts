@@ -71,6 +71,75 @@ export interface CommitResult {
   summary: string
 }
 
+export interface BranchInfo {
+  name: string
+  remote: boolean
+  current: boolean
+  upstream: string
+  ahead: number
+  behind: number
+  sha: string
+  subject: string
+}
+
+export interface RemoteInfo {
+  name: string
+  url: string
+  pushUrl: string
+}
+
+export interface CommitFile {
+  path: string
+  from: string
+  added: number
+  removed: number
+  binary: boolean
+}
+
+export interface CommitDetail {
+  sha: string
+  short: string
+  author: string
+  email: string
+  time: number
+  committer: string
+  parents: string[]
+  refs: string[]
+  subject: string
+  body: string
+  files: CommitFile[]
+  patch: string
+  added: number
+  removed: number
+  tooLarge: boolean
+}
+
+export type SyncAction = 'fetch' | 'pull' | 'push'
+
+export interface SyncResult {
+  ok: true
+  summary: string
+  output: string
+}
+
+export type CommitAction = 'revert' | 'reset-soft' | 'reset-mixed' | 'reset-hard' | 'rebase'
+
+export interface CommitActionResult {
+  ok: true
+  action: CommitAction
+  summary: string
+  output: string
+}
+
+export interface TerminalResult {
+  ok: true
+  command: string
+  output: string
+  code: number | null
+  cwd: string
+  durationMs: number
+}
+
 export class ApiError extends Error {
   status: number
   detail: string
@@ -133,6 +202,15 @@ export const api = {
   message(cwd: string): Promise<{ ok: true; message: string }> {
     return get('message', { cwd })
   },
+  branches(cwd: string): Promise<{ ok: true; branches: BranchInfo[] }> {
+    return get('branches', { cwd })
+  },
+  remotes(cwd: string): Promise<{ ok: true; remotes: RemoteInfo[] }> {
+    return get('remotes', { cwd })
+  },
+  commitDetail(cwd: string, sha: string): Promise<{ ok: true; commit: CommitDetail }> {
+    return get('commit', { cwd, sha })
+  },
   stage(cwd: string, paths: string[]): Promise<{ ok: true }> {
     return post('stage', { cwd, paths })
   },
@@ -144,5 +222,33 @@ export const api = {
   },
   commit(cwd: string, message: string, amend: boolean): Promise<CommitResult> {
     return post('commit', { cwd, message, amend })
+  },
+  sync(
+    cwd: string,
+    action: SyncAction,
+    options: { remote?: string; branch?: string; setUpstream?: boolean; force?: boolean } = {},
+  ): Promise<SyncResult> {
+    return post('sync', { cwd, action, ...options })
+  },
+  checkout(cwd: string, target: string, create = false): Promise<{ ok: true; branch: string }> {
+    return post('checkout', { cwd, target, create })
+  },
+  deleteBranch(cwd: string, name: string, force = false): Promise<{ ok: true }> {
+    return post('branch-delete', { cwd, name, force })
+  },
+  addRemote(cwd: string, name: string, url: string): Promise<{ ok: true }> {
+    return post('remote-add', { cwd, name, url })
+  },
+  removeRemote(cwd: string, name: string): Promise<{ ok: true }> {
+    return post('remote-remove', { cwd, name })
+  },
+  setRemoteUrl(cwd: string, name: string, url: string): Promise<{ ok: true }> {
+    return post('remote-url', { cwd, name, url })
+  },
+  commitAction(cwd: string, sha: string, action: CommitAction): Promise<CommitActionResult> {
+    return post('commit-action', { cwd, sha, action })
+  },
+  terminal(cwd: string, command: string): Promise<TerminalResult> {
+    return post('terminal', { cwd, command })
   },
 }

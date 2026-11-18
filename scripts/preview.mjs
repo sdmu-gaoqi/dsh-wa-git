@@ -81,10 +81,27 @@ if (data.state) {
       },
     ),
     message: () => Promise.resolve(data.message),
+    branches: () => Promise.resolve(data.branches),
+    remotes: () => Promise.resolve(data.remotes),
+    commitDetail: (cwd_, sha) => Promise.resolve(
+      data.commits[sha] ?? { ok: true, commit: data.commits[Object.keys(data.commits)[0]] },
+    ),
     stage: () => Promise.resolve({ ok: true }),
     unstage: () => Promise.resolve({ ok: true }),
     discard: () => Promise.resolve({ ok: true }),
     commit: () => Promise.resolve({ ok: true, sha: '0'.repeat(40), short: '0000000', branch: 'main', summary: '' }),
+    sync: () => Promise.resolve({ ok: true, summary: '已拉取', output: '' }),
+    checkout: () => Promise.resolve({ ok: true, branch: 'main' }),
+    deleteBranch: () => Promise.resolve({ ok: true }),
+    addRemote: () => Promise.resolve({ ok: true }),
+    removeRemote: () => Promise.resolve({ ok: true }),
+    setRemoteUrl: () => Promise.resolve({ ok: true }),
+    commitAction: () => Promise.resolve({ ok: true, action: 'reset-soft', summary: 'ok', output: '' }),
+    terminal: (cwd_, command) => Promise.resolve(
+      data.terminal && data.terminal[command]
+        ? { ok: true, command, ...data.terminal[command] }
+        : { ok: true, command, output: '', code: 0, cwd: cwd_, durationMs: 1 },
+    ),
   })
 }
 
@@ -123,6 +140,17 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     diffs[`${entry.path}|${entry.kind === 'staged' ? '1' : '0'}`] = diffFixture(target, entry.path, entry.kind === 'staged')
   }
 
+  const branches = branchFixture(target)
+  const remotes = {
+    ok: true,
+    remotes: [{ name: 'origin', url: 'https://github.com/example/dsh-wa-git.git', pushUrl: 'https://github.com/example/dsh-wa-git.git' }],
+  }
+  const commits = {}
+  for (const commit of state.commits.slice(0, 6)) {
+    commits[commit.sha] = { ok: true, commit: commitFixture(target, commit.sha) }
+  }
+  const terminal = terminalFixture(target)
+
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>@wagq/dsh-git preview</title>
 <style>
@@ -153,6 +181,10 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     state,
     sessions: { ok: true, sessions: [{ id: 'session-1', cwd: target, title: 'demo' }] },
     diffs,
+    branches,
+    remotes,
+    commits,
+    terminal,
     message: { ok: true, message: 'chore: 更新 2 个文件' },
   }).replace(/</g, '\\u003c')};</script>
 <script src="${path.basename(outfile)}"></script>
@@ -163,21 +195,156 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
 
   const { chromium } = await importPlaywright()
   const browser = await launchChromium(chromium)
-  const page = await browser.newPage({ viewport: { width: 900, height: 760 }, deviceScaleFactor: 2 })
+  const page = await browser.newPage({ viewport: { width: 980, height: 820 }, deviceScaleFactor: 2 })
+  page.on('pageerror', (error) => console.error('[preview:pageerror]', error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error') console.error('[preview:console]', message.text())
+  })
   await page.goto(`file://${htmlPath.replace(/\\/g, '/')}`)
-  await page.waitForTimeout(900)
-  if (process.argv.includes('--diff')) {
-    // Click the first changed file so the inline diff is in the screenshot.
-    await page.locator('.dshg-row').first().click()
-    await page.waitForTimeout(500)
+  await page.waitForTimeout(800)
+
+  // Scene = what the screenshot should be showing.
+  const scene = process.argv.find((arg) => arg.startsWith('--scene='))?.slice('--scene='.length) ?? 'changes'
+  const shots = {
+    changes: 'scm-popup.png',
+    diff: 'scm-popup-diff.png',
+    graph: 'scm-popup-graph.png',
+    menu: 'scm-popup-menu.png',
+    context: 'scm-popup-context.png',
+    branches: 'scm-popup-branches.png',
+    terminal: 'scm-popup-terminal.png',
   }
-  const target_png = path.join(ROOT, 'preview', process.argv.includes('--diff') ? 'scm-popup-diff.png' : 'scm-popup.png')
+  const file = shots[scene] ?? shots.changes
+
+  if (scene === 'diff') {
+    await page.locator('.dshg-row').first().click()
+    await page.waitForTimeout(400)
+  } else if (scene === 'graph') {
+    await page.getByRole('tab', { name: /图表/ }).click()
+    await page.waitForTimeout(200)
+    await page.locator('.dshg-grow').first().click()
+    await page.waitForTimeout(400)
+  } else if (scene === 'menu') {
+    await page.locator('button[title="更多操作"]').click()
+    await page.waitForTimeout(250)
+  } else if (scene === 'context') {
+    await page.getByRole('tab', { name: /图表/ }).click()
+    await page.waitForTimeout(200)
+    await page.locator('.dshg-grow').nth(1).click({ button: 'right' })
+    await page.waitForTimeout(250)
+  } else if (scene === 'branches') {
+    await page.locator('.dshg-branch-btn').click()
+    await page.waitForTimeout(350)
+  } else if (scene === 'terminal') {
+    await page.getByRole('tab', { name: /终端/ }).click()
+    await page.waitForTimeout(200)
+    await page.locator('.dshg-term-field').fill('git log --oneline --graph --all -8')
+    await page.locator('.dshg-term-field').press('Enter')
+    await page.waitForTimeout(500)
+    await page.locator('.dshg-term-field').fill('git status -sb')
+    await page.locator('.dshg-term-field').press('Enter')
+    await page.waitForTimeout(400)
+  }
+
+  const target_png = path.join(ROOT, 'preview', file)
   fs.mkdirSync(path.dirname(target_png), { recursive: true })
   await page.screenshot({ path: target_png })
   await browser.close()
   console.log('[preview]', target_png)
   fs.rmSync(outfile, { force: true })
   fs.rmSync(htmlPath, { force: true })
+}
+
+/* --------------------------------------------------------------- fixtures */
+
+function branchFixture(cwd) {
+  const git = (...args) => {
+    try {
+      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch {
+      return ''
+    }
+  }
+  const out = []
+  for (const line of git('for-each-ref', '--sort=-committerdate', '--format=%(refname:short)%1f%(HEAD)%1f%(upstream:short)%1f%(objectname:short)%1f%(contents:subject)', 'refs/heads').split('\n')) {
+    if (line.trim() === '') continue
+    const [name, head, upstream, sha, subject] = line.split('\x1f')
+    out.push({ name, remote: false, current: head.trim() === '*', upstream, ahead: 0, behind: 0, sha, subject })
+  }
+  out.push({ name: 'origin/main', remote: true, current: false, upstream: '', ahead: 0, behind: 0, sha: out[0]?.sha ?? '', subject: '' })
+  out.push({ name: 'origin/feat/scm-panel', remote: true, current: false, upstream: '', ahead: 0, behind: 0, sha: out[1]?.sha ?? '', subject: '' })
+  return { ok: true, branches: out }
+}
+
+function commitFixture(cwd, sha) {
+  const git = (...args) => {
+    try {
+      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (error) {
+      return typeof error.stdout === 'string' ? error.stdout : ''
+    }
+  }
+  const meta = git('show', '--no-patch', '--pretty=format:%H%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%D%x1f%s%x1f%b', sha)
+  const [full, author, email, time, parents, refs, subject, body] = meta.split('\x1f')
+  const parent = (parents ?? '').trim()
+  const patch = parent === '' ? git('show', '--no-color', '--format=', sha) : git('diff', '--no-color', `${sha}^`, sha)
+  const files = []
+  for (const line of git('diff', '--numstat', parent === '' ? `${sha}^` : `${sha}^`, sha).split('\n')) {
+    if (line.trim() === '') continue
+    const [added, removed, ...rest] = line.split('\t')
+    const filePath = rest.join('\t')
+    if (filePath === '') continue
+    files.push({ path: filePath, from: '', added: Number(added) || 0, removed: Number(removed) || 0, binary: added === '-' })
+  }
+  let added = 0
+  let removed = 0
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) added += 1
+    else if (line.startsWith('-')) removed += 1
+  }
+  return {
+    sha: full,
+    short: (full ?? sha).slice(0, 7),
+    author: author ?? '',
+    email: email ?? '',
+    time: Number(time) || 0,
+    committer: author ?? '',
+    parents: parent === '' ? [] : parent.split(' '),
+    refs: (refs ?? '')
+      .split(',')
+      .map((part) => part.trim().replace(/^HEAD -> /, ''))
+      .filter(Boolean),
+    subject: subject ?? '',
+    body: body ?? '',
+    files,
+    patch,
+    added,
+    removed,
+    tooLarge: false,
+  }
+}
+
+function terminalFixture(cwd) {
+  const run = (command) => {
+    try {
+      const stdout = execFileSync('powershell.exe', ['-NoLogo', '-NonInteractive', '-NoProfile', '-Command', command], {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      return { output: stdout.trimEnd(), code: 0, cwd, durationMs: 24 }
+    } catch (error) {
+      return { output: String(error.stdout ?? '').trimEnd(), code: 1, cwd, durationMs: 24 }
+    }
+  }
+  return {
+    'git log --oneline --graph --all -8': run('git log --oneline --graph --all -8'),
+    'git status -sb': run('git status -sb'),
+    'git branch -vv': run('git branch -vv'),
+    'git diff --stat': run('git diff --stat'),
+    'git stash list': run('git stash list'),
+  }
 }
 
 async function launchChromium(chromium) {

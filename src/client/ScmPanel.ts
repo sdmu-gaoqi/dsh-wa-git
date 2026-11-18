@@ -1,25 +1,42 @@
 /**
- * The SCM popup — VS Code「源代码管理 / 图表」shaped.
+ * The SCM popup — VS Code「源代码管理 / 图表」shaped, extended with a branch bar,
+ * a ⋯ menu, a commit detail view and an embedded git terminal.
  *
- * Layout follows the reference screenshot: repo + branch pill in the header,
- * a commit message box with 提交 under it, the 更改 list (暂存的更改 → 更改 →
- * 未跟踪), the inline diff of the picked file, and the 图表 commit graph.
+ * Three tabs:
+ *   更改  working tree list (+ inline diff)
+ *   图表  commit graph, click a row → commit detail, right-click → history ops
+ *   终端  free-form git shell rooted at the repo
  *
  * All colours come from `--dsw-alias-*` host tokens, so the panel inherits the
  * active theme instead of pinning its own palette.
  */
 import * as React from 'react'
 import { ApiError, api } from './api'
-import type { CommitNode, DiffPayload, RepoState, StatusEntry } from './api'
+import type {
+  BranchInfo,
+  CommitAction,
+  CommitDetail,
+  CommitNode,
+  DiffPayload,
+  RemoteInfo,
+  RepoState,
+  StatusEntry,
+} from './api'
 import { ICONS } from './icons'
 import { CSS } from './styles'
 import { layoutGraph, laneColor } from './graph'
 import type { GraphRow } from './graph'
+import { DiffBody } from './parts/DiffBody'
+import { Menu } from './parts/Menu'
+import type { MenuItem } from './parts/Menu'
+import { Terminal } from './parts/Terminal'
 
 const STYLE_ID = '@wagq/dsh-git/scm.css'
-const AUTO_REFRESH_MS = 15_000
+const AUTO_REFRESH_MS = 20_000
 const LANE_W = 14
-const ROW_H = 24
+const ROW_H = 26
+
+type Tab = 'changes' | 'graph' | 'terminal'
 
 /* ------------------------------------------------------------------ styles */
 
@@ -71,11 +88,16 @@ function relativeTime(seconds: number): string {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
-type RefKind = 'head' | 'tag' | 'remote' | 'branch'
+function absoluteTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return ''
+  const date = new Date(seconds * 1000)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
 
-function refKind(ref: string): RefKind {
+function refKind(ref: string): 'tag' | 'remote' | 'branch' {
   if (/^tag: /i.test(ref)) return 'tag'
-  if (/^[^/\s]+\/[^/\s]+$/.test(ref) && !/^(HEAD|tag:)/i.test(ref)) return 'remote'
+  if (/^[^/\s]+\/[^/\s]+$/.test(ref)) return 'remote'
   return 'branch'
 }
 
@@ -83,170 +105,26 @@ function refLabel(ref: string): string {
   return ref.replace(/^tag: /i, '').replace(/^origin\//, '')
 }
 
-function refTitle(refs: string[]): string {
-  if (refs.length === 0) return ''
-  return refs.join('\n')
-}
-
-/* -------------------------------------------------------------------- diff */
-
-interface DiffLine {
-  kind: 'add' | 'del' | 'ctx' | 'hunk'
-  oldNo: number | null
-  newNo: number | null
-  text: string
-}
-
-function parsePatch(patch: string): DiffLine[] {
-  const out: DiffLine[] = []
-  let oldNo = 0
-  let newNo = 0
-  for (const line of patch.split('\n')) {
-    if (line.startsWith('@@')) {
-      const match = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/.exec(line)
-      if (match !== null) {
-        oldNo = Number(match[1])
-        newNo = Number(match[2])
-        const tail = (match[3] ?? '').trim()
-        out.push({ kind: 'hunk', oldNo: null, newNo: null, text: tail === '' ? `@@ -${oldNo} +${newNo} @@` : tail })
-      }
-      continue
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    // Clipboard API needs a secure context; fall back to a scratch textarea.
+    try {
+      const area = document.createElement('textarea')
+      area.value = text
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      const ok = document.execCommand('copy')
+      area.remove()
+      return ok
+    } catch {
+      return false
     }
-    // File headers (`diff --git`, `index`, `---`, `+++`, mode lines) carry no
-    // content — VS Code's diff view hides them too.
-    if (
-      line.startsWith('diff --git') ||
-      line.startsWith('index ') ||
-      line.startsWith('--- ') ||
-      line.startsWith('+++ ') ||
-      line.startsWith('new file mode') ||
-      line.startsWith('deleted file mode') ||
-      line.startsWith('similarity index') ||
-      line.startsWith('rename from') ||
-      line.startsWith('rename to') ||
-      line.startsWith('old mode') ||
-      line.startsWith('new mode') ||
-      line.startsWith('\\')
-    ) {
-      continue
-    }
-    if (line.startsWith('+')) {
-      out.push({ kind: 'add', oldNo: null, newNo, text: line.slice(1) })
-      newNo += 1
-      continue
-    }
-    if (line.startsWith('-')) {
-      out.push({ kind: 'del', oldNo, newNo: null, text: line.slice(1) })
-      oldNo += 1
-      continue
-    }
-    out.push({ kind: 'ctx', oldNo, newNo, text: line.startsWith(' ') ? line.slice(1) : line })
-    oldNo += 1
-    newNo += 1
   }
-  return out
-}
-
-function DiffView(props: { cwd: string; entry: StatusEntry; onClose: () => void }): React.ReactElement {
-  const { cwd, entry, onClose } = props
-  const [payload, setPayload] = React.useState<DiffPayload | null>(null)
-  const [error, setError] = React.useState('')
-  const [loading, setLoading] = React.useState(true)
-
-  React.useEffect(() => {
-    let alive = true
-    setLoading(true)
-    setError('')
-    setPayload(null)
-    api
-      .diff(cwd, entry.path, entry.kind === 'staged', entry.from)
-      .then((next) => {
-        if (alive) setPayload(next)
-      })
-      .catch((err: unknown) => {
-        if (alive) setError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => {
-        if (alive) setLoading(false)
-      })
-    return () => {
-      alive = false
-    }
-  }, [cwd, entry.path, entry.kind, entry.from])
-
-  const rows = payload !== null && !payload.binary ? parsePatch(payload.patch) : []
-
-  const body = (): React.ReactElement => {
-    if (loading) return React.createElement('div', { className: 'dshg-diffempty' }, '正在读取差异…')
-    if (error !== '') return React.createElement('div', { className: 'dshg-diffempty' }, error)
-    if (payload === null) return React.createElement('div', { className: 'dshg-diffempty' }, '没有可显示的差异')
-    if (payload.binary) return React.createElement('div', { className: 'dshg-diffempty' }, '二进制文件，无法以文本显示差异')
-    if (rows.length === 0) return React.createElement('div', { className: 'dshg-diffempty' }, '没有可显示的差异')
-    return React.createElement(
-      'table',
-      null,
-      // Explicit widths: `table-layout: fixed` reads the colgroup, not the第一行
-      // (a hunk row spans all three columns and would otherwise equalise them).
-      React.createElement(
-        'colgroup',
-        null,
-        React.createElement('col', { style: { width: 38 } }),
-        React.createElement('col', { style: { width: 38 } }),
-        React.createElement('col', null),
-      ),
-      React.createElement(
-        'tbody',
-        null,
-        ...rows.map((row, index) =>
-          row.kind === 'hunk'
-            ? React.createElement(
-                'tr',
-                { key: index, className: 'dshg-hunk' },
-                React.createElement('td', { className: 'dshg-code', colSpan: 3 }, row.text),
-              )
-            : React.createElement(
-                'tr',
-                {
-                  key: index,
-                  className: row.kind === 'add' ? 'dshg-ln-add' : row.kind === 'del' ? 'dshg-ln-del' : undefined,
-                },
-                React.createElement('td', { className: 'dshg-num' }, row.oldNo === null ? '' : String(row.oldNo)),
-                React.createElement('td', { className: 'dshg-num' }, row.newNo === null ? '' : String(row.newNo)),
-                React.createElement('td', { className: 'dshg-code' }, row.text === '' ? ' ' : row.text),
-              ),
-        ),
-      ),
-    )
-  }
-
-  return React.createElement(
-    'div',
-    { className: 'dshg-diff' },
-    React.createElement(
-      'div',
-      { className: 'dshg-diffhead' },
-      React.createElement(Icon, { name: 'file' }),
-      React.createElement('span', { className: 'dshg-diffpath', title: entry.path }, entry.path),
-      payload !== null && !payload.binary
-        ? React.createElement(
-            'span',
-            { className: 'dshg-rowstat' },
-            React.createElement('span', { className: 'dshg-add' }, `+${payload.added}`),
-            React.createElement('span', { className: 'dshg-del' }, `-${payload.removed}`),
-          )
-        : null,
-      React.createElement('span', { className: 'dshg-spacer' }),
-      React.createElement(
-        'button',
-        { type: 'button', className: 'dshg-mini', title: '关闭差异', onClick: onClose },
-        React.createElement(Icon, { name: 'close' }),
-      ),
-    ),
-    React.createElement('div', { className: 'dshg-diffbody' }, body()),
-    payload?.tooLarge === true
-      ? React.createElement('div', { className: 'dshg-diffempty' }, '差异过大，仅显示前 60 万字符')
-      : null,
-  )
 }
 
 /* ------------------------------------------------------------------- graph */
@@ -272,8 +150,6 @@ function GraphLanes(props: { row: GraphRow; lanes: number }): React.ReactElement
       }),
     )
   }
-
-  // Above the node: only when a parent line actually arrives from a previous row.
   if (row.fromTop) {
     children.push(
       React.createElement('line', {
@@ -288,8 +164,6 @@ function GraphLanes(props: { row: GraphRow; lanes: number }): React.ReactElement
       }),
     )
   }
-
-  // Below the node: straight down to the first parent.
   if (row.toBottom) {
     children.push(
       React.createElement('line', {
@@ -304,7 +178,6 @@ function GraphLanes(props: { row: GraphRow; lanes: number }): React.ReactElement
       }),
     )
   }
-
   for (const merge of row.merges) {
     if (merge.lane === row.lane) continue
     const x1 = cx(row.lane)
@@ -320,7 +193,6 @@ function GraphLanes(props: { row: GraphRow; lanes: number }): React.ReactElement
       }),
     )
   }
-
   children.push(
     React.createElement('circle', {
       key: 'node',
@@ -332,49 +204,10 @@ function GraphLanes(props: { row: GraphRow; lanes: number }): React.ReactElement
       strokeWidth: 2,
     }),
   )
-
   return React.createElement(
     'svg',
-    {
-      className: 'dshg-gsvg',
-      width,
-      height: ROW_H,
-      viewBox: `0 0 ${width} ${ROW_H}`,
-      'aria-hidden': 'true',
-    },
+    { className: 'dshg-gsvg', width, height: ROW_H, viewBox: `0 0 ${width} ${ROW_H}`, 'aria-hidden': 'true' },
     ...children,
-  )
-}
-
-function GraphRowView(props: { commit: CommitNode; row: GraphRow; lanes: number }): React.ReactElement {
-  const { commit, row, lanes } = props
-  const head = commit.refs.some((ref) => refKind(ref) === 'branch')
-  return React.createElement(
-    'div',
-    {
-      className: 'dshg-grow',
-      'data-head': head,
-      title: `${commit.short}\n${commit.author}\n${commit.subject}${commit.refs.length > 0 ? `\n${refTitle(commit.refs)}` : ''}`,
-    },
-    React.createElement(GraphLanes, { row, lanes }),
-    React.createElement(
-      'span',
-      { className: 'dshg-gmeta' },
-      ...commit.refs.slice(0, 3).map((ref, index) =>
-        React.createElement(
-          'span',
-          { key: `${ref}-${index}`, className: 'dshg-gref', 'data-kind': refKind(ref) },
-          refLabel(ref),
-        ),
-      ),
-      React.createElement('span', { className: 'dshg-gsubject' }, commit.subject === '' ? '(no message)' : commit.subject),
-    ),
-    React.createElement(
-      'span',
-      { className: 'dshg-gside' },
-      React.createElement('span', { className: 'dshg-gsha' }, commit.short),
-      React.createElement('span', null, relativeTime(commit.time)),
-    ),
   )
 }
 
@@ -399,7 +232,7 @@ function useRepoState(cwd: string, open: boolean): RepoHook {
       const mine = ++seq.current
       if (!quiet) setLoading(true)
       api
-        .state(cwd, 80)
+        .state(cwd, 120)
         .then((next) => {
           if (mine !== seq.current) return
           setState(next)
@@ -430,6 +263,270 @@ function useRepoState(cwd: string, open: boolean): RepoHook {
   return { state, loading, error, refresh: load }
 }
 
+/* ------------------------------------------------------------ commit detail */
+
+function CommitDetailView(props: {
+  cwd: string
+  sha: string
+  onClose: () => void
+}): React.ReactElement {
+  const { cwd, sha, onClose } = props
+  const [detail, setDetail] = React.useState<CommitDetail | null>(null)
+  const [error, setError] = React.useState('')
+  const [loading, setLoading] = React.useState(true)
+
+  React.useEffect(() => {
+    let alive = true
+    setLoading(true)
+    setError('')
+    setDetail(null)
+    api
+      .commitDetail(cwd, sha)
+      .then((result) => {
+        if (alive) setDetail(result.commit)
+      })
+      .catch((err: unknown) => {
+        if (alive) setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [cwd, sha])
+
+  const meta = (): React.ReactElement | null => {
+    if (detail === null) return null
+    return React.createElement(
+      'div',
+      { className: 'dshg-cmeta' },
+      React.createElement('div', { className: 'dshg-cmeta-subject' }, detail.subject === '' ? '(no message)' : detail.subject),
+      React.createElement(
+        'div',
+        { className: 'dshg-cmeta-row' },
+        React.createElement('span', { className: 'dshg-gsha' }, detail.short),
+        React.createElement('span', null, detail.author),
+        React.createElement('span', { title: absoluteTime(detail.time) }, relativeTime(detail.time)),
+        detail.parents.length > 1
+          ? React.createElement('span', { className: 'dshg-gref', 'data-kind': 'remote' }, `merge · ${detail.parents.length} parents`)
+          : null,
+      ),
+      detail.body.trim() === ''
+        ? null
+        : React.createElement('pre', { className: 'dshg-cmeta-body' }, detail.body.trim()),
+      React.createElement(
+        'div',
+        { className: 'dshg-cmeta-files' },
+        ...detail.files.map((file) =>
+          React.createElement(
+            'span',
+            { key: `${file.path}:${file.from}`, className: 'dshg-cfile', title: file.from === '' ? file.path : `${file.from} → ${file.path}` },
+            React.createElement('span', { className: 'dshg-cfile-name' }, file.path),
+            file.binary
+              ? React.createElement('span', { className: 'dshg-rowstat' }, 'bin')
+              : React.createElement(
+                  'span',
+                  { className: 'dshg-rowstat' },
+                  React.createElement('span', { className: 'dshg-add' }, `+${file.added}`),
+                  React.createElement('span', { className: 'dshg-del' }, `−${file.removed}`),
+                ),
+          ),
+        ),
+      ),
+    )
+  }
+
+  return React.createElement(
+    'div',
+    { className: 'dshg-diff dshg-cdetail' },
+    React.createElement(
+      'div',
+      { className: 'dshg-diffhead' },
+      React.createElement(Icon, { name: 'commit' }),
+      React.createElement('span', { className: 'dshg-diffpath' }, `提交 ${sha.slice(0, 7)}`),
+      detail !== null
+        ? React.createElement(
+            'span',
+            { className: 'dshg-rowstat' },
+            React.createElement('span', { className: 'dshg-add' }, `+${detail.added}`),
+            React.createElement('span', { className: 'dshg-del' }, `−${detail.removed}`),
+          )
+        : null,
+      React.createElement('span', { className: 'dshg-spacer' }),
+      React.createElement(
+        'button',
+        { type: 'button', className: 'dshg-mini', title: '关闭（Esc）', onClick: onClose },
+        React.createElement(Icon, { name: 'close' }),
+      ),
+    ),
+    React.createElement(
+      'div',
+      { className: 'dshg-diffbody' },
+      loading ? React.createElement('div', { className: 'dshg-diffempty' }, '正在读取提交…') : null,
+      !loading && error !== '' ? React.createElement('div', { className: 'dshg-diffempty' }, error) : null,
+      !loading && detail !== null
+        ? React.createElement(
+            React.Fragment,
+            null,
+            meta(),
+            React.createElement(DiffBody, { patch: detail.patch, empty: '这个提交没有文本差异' }),
+            detail.tooLarge ? React.createElement('div', { className: 'dshg-diffempty' }, '差异过大，仅显示前 60 万字符') : null,
+          )
+        : null,
+    ),
+  )
+}
+
+/* -------------------------------------------------------------- branch menu */
+
+function BranchPicker(props: {
+  cwd: string
+  current: string
+  onClose: () => void
+  onSwitched: () => void
+  x: number
+  y: number
+}): React.ReactElement {
+  const { cwd, current, onClose, onSwitched, x, y } = props
+  const [list, setList] = React.useState<BranchInfo[] | null>(null)
+  const [error, setError] = React.useState('')
+  const [filter, setFilter] = React.useState('')
+  const [newName, setNewName] = React.useState('')
+
+  React.useEffect(() => {
+    let alive = true
+    api
+      .branches(cwd)
+      .then((result) => {
+        if (alive) setList(result.branches)
+      })
+      .catch((err: unknown) => {
+        if (alive) setError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      alive = false
+    }
+  }, [cwd])
+
+  const switchTo = (name: string): void => {
+    api
+      .checkout(cwd, name)
+      .then(() => {
+        onSwitched()
+        onClose()
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+  }
+
+  const filtered = (list ?? []).filter((branch) => filter === '' || branch.name.toLowerCase().includes(filter.toLowerCase()))
+  const local = filtered.filter((branch) => !branch.remote)
+  const remote = filtered.filter((branch) => branch.remote)
+
+  return React.createElement(
+    'div',
+    {
+      className: 'dshg-menu dshg-branchpicker',
+      style: { left: Math.max(8, x - 260), top: y + 6, width: 300 },
+      role: 'dialog',
+      'aria-label': '切换分支',
+    },
+    React.createElement('div', { className: 'dshg-menu-head' }, '切换分支 / 标签'),
+    React.createElement('input', {
+      className: 'dshg-input',
+      placeholder: '筛选分支名…',
+      value: filter,
+      autoFocus: true,
+      spellCheck: false,
+      onChange: (event: React.ChangeEvent<HTMLInputElement>) => setFilter(event.target.value),
+      onKeyDown: (event: React.KeyboardEvent) => {
+        if (event.key === 'Escape') onClose()
+        if (event.key === 'Enter') {
+          const first = filtered[0]
+          if (first !== undefined && !first.current) switchTo(first.name)
+        }
+      },
+    }),
+    error !== '' ? React.createElement('div', { className: 'dshg-err' }, error) : null,
+    list === null
+      ? React.createElement('div', { className: 'dshg-loading' }, '读取分支…')
+      : React.createElement(
+          'div',
+          { className: 'dshg-menu-scroll' },
+          local.length > 0 ? React.createElement('div', { className: 'dshg-menu-head' }, '本地') : null,
+          ...local.map((branch) =>
+            React.createElement(
+              'button',
+              {
+                key: `l:${branch.name}`,
+                type: 'button',
+                className: `dshg-menu-item${branch.current ? ' dshg-menu-current' : ''}`,
+                disabled: branch.current,
+                title: branch.subject,
+                onClick: () => switchTo(branch.name),
+              },
+              React.createElement('span', { className: 'dshg-menu-icon' }, branch.current ? React.createElement(Icon, { name: 'check' }) : null),
+              React.createElement('span', { className: 'dshg-menu-label' }, branch.name),
+              branch.ahead > 0 || branch.behind > 0
+                ? React.createElement('span', { className: 'dshg-menu-hint' }, `↑${branch.ahead} ↓${branch.behind}`)
+                : React.createElement('span', { className: 'dshg-menu-hint' }, branch.sha),
+            ),
+          ),
+          remote.length > 0 ? React.createElement('div', { className: 'dshg-menu-head' }, '远程') : null,
+          ...remote.map((branch) =>
+            React.createElement(
+              'button',
+              {
+                key: `r:${branch.name}`,
+                type: 'button',
+                className: 'dshg-menu-item',
+                title: branch.subject,
+                onClick: () => {
+                  // A remote ref is not checked out directly; create a local branch
+                  // that tracks it, which is what the user means by "switch to it".
+                  const localName = branch.name.replace(/^[^/]+\//, '')
+                  api
+                    .checkout(cwd, localName, true)
+                    .then(() => {
+                      onSwitched()
+                      onClose()
+                    })
+                    .catch(() => {
+                      switchTo(branch.name)
+                    })
+                },
+              },
+              React.createElement('span', { className: 'dshg-menu-icon' }, null),
+              React.createElement('span', { className: 'dshg-menu-label' }, branch.name),
+              React.createElement('span', { className: 'dshg-menu-hint' }, branch.sha),
+            ),
+          ),
+        ),
+    React.createElement(
+      'div',
+      { className: 'dshg-branchnew' },
+      React.createElement('input', {
+        className: 'dshg-input',
+        placeholder: '新分支名（从当前 HEAD 创建）',
+        value: newName,
+        spellCheck: false,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => setNewName(event.target.value),
+        onKeyDown: (event: React.KeyboardEvent) => {
+          if (event.key === 'Enter' && newName.trim() !== '') {
+            api
+              .checkout(cwd, newName.trim(), true)
+              .then(() => {
+                onSwitched()
+                onClose()
+              })
+              .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+          }
+        },
+      }),
+    ),
+  )
+}
+
 /* ------------------------------------------------------------------- popup */
 
 interface PopupProps {
@@ -443,25 +540,33 @@ function Popup(props: PopupProps): React.ReactElement {
   const repo = useRepoState(cwd, true)
   const state = repo.state
 
+  const [tab, setTab] = React.useState<Tab>('changes')
   const [message, setMessage] = React.useState('')
   const [amend, setAmend] = React.useState(false)
   const [busy, setBusy] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const [failure, setFailure] = React.useState('')
   const [selected, setSelected] = React.useState<StatusEntry | null>(null)
-  const [open, setOpen] = React.useState({ staged: true, changes: true, untracked: true, graph: true })
+  const [open, setOpen] = React.useState({ staged: true, changes: true, untracked: true })
+  const [menu, setMenu] = React.useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const [branchPicker, setBranchPicker] = React.useState<{ x: number; y: number } | null>(null)
+  const [commitSha, setCommitSha] = React.useState('')
+  const [detail, setDetail] = React.useState<CommitDetail | null>(null)
+  const [confirm, setConfirm] = React.useState<{ title: string; body: string; run: () => void } | null>(null)
   const messageRef = React.useRef<HTMLTextAreaElement | null>(null)
+
+  const stagedCount = state?.staged.length ?? 0
 
   React.useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-      }
+      if (event.key !== 'Escape') return
+      if (menu !== null || branchPicker !== null || confirm !== null) return // those handle it first
+      event.preventDefault()
+      onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, menu, branchPicker, confirm])
 
   React.useEffect(() => {
     setSelected(null)
@@ -469,23 +574,39 @@ function Popup(props: PopupProps): React.ReactElement {
     setAmend(false)
     setNotice('')
     setFailure('')
+    setCommitSha('')
+    setTab('changes')
   }, [cwd])
 
-  const run = (label: string, task: () => Promise<unknown>): void => {
+  const run = (label: string, task: () => Promise<unknown>, after?: () => void): void => {
     setBusy(label)
     setFailure('')
     setNotice('')
     task()
-      .then(() => repo.refresh(true))
+      .then(() => {
+        repo.refresh(true)
+        after?.()
+      })
       .catch((err: unknown) => {
-        const detail = err instanceof ApiError ? err.detail : ''
-        setFailure(detail !== '' ? detail : err instanceof Error ? err.message : String(err))
+        const detailText = err instanceof ApiError ? err.detail : ''
+        setFailure(detailText !== '' ? detailText : err instanceof Error ? err.message : String(err))
       })
       .finally(() => setBusy(''))
   }
 
-  const stagedCount = state?.staged.length ?? 0
-  const canCommit = busy === '' && (stagedCount > 0 || amend) && message.trim() !== ''
+  const notify = (text: string): void => {
+    setNotice(text)
+    window.setTimeout(() => setNotice((prev) => (prev === text ? '' : prev)), 4000)
+  }
+
+  const doSync = (action: 'fetch' | 'pull' | 'push'): void => {
+    run(action, () =>
+      api.sync(cwd, action, { setUpstream: action === 'push' }).then((result) => {
+        notify(result.summary)
+        if (action === 'pull' || action === 'push') repo.refresh(true)
+      }),
+    )
+  }
 
   const doCommit = (): void => {
     if (message.trim() === '') {
@@ -496,18 +617,247 @@ function Popup(props: PopupProps): React.ReactElement {
       const result = await api.commit(cwd, message.trim(), amend)
       setMessage('')
       setAmend(false)
-      setNotice(`已提交 ${result.short}`)
+      notify(`已提交 ${result.short}${result.branch === '' ? '' : ` · ${result.branch}`}`)
     })
   }
 
-  const position = (): React.CSSProperties => {
-    const width = 440
-    if (anchor === null || typeof window === 'undefined') return { top: 72, right: 16, width }
-    const right = Math.max(12, Math.min(window.innerWidth - width - 12, window.innerWidth - anchor.right))
-    const top = Math.max(12, Math.min(anchor.bottom + 8, window.innerHeight - 300))
-    return { top, right, width }
+  const doManualRefresh = (): void => {
+    repo.refresh(false)
   }
 
+  /* ---- ⋯ menu ---- */
+  const openMainMenu = (event: React.MouseEvent): void => {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const behind = state?.repo.behind ?? 0
+    const ahead = state?.repo.ahead ?? 0
+    setMenu({
+      x: rect.right - 214,
+      y: rect.bottom + 4,
+      items: [
+        { id: 'h1', label: '同步', heading: true },
+        {
+          id: 'pull',
+          label: '拉取（Pull）',
+          icon: React.createElement(Icon, { name: 'download' }),
+          hint: behind > 0 ? `落后 ${behind}` : undefined,
+          onSelect: () => doSync('pull'),
+        },
+        {
+          id: 'push',
+          label: '推送（Push）',
+          icon: React.createElement(Icon, { name: 'upload' }),
+          hint: ahead > 0 ? `领先 ${ahead}` : undefined,
+          onSelect: () => {
+            if (ahead === 0) {
+              // Nothing to push is not an error worth a round trip — but the user
+              // may still want to publish an unpushed branch, so ask git anyway.
+            }
+            doSync('push')
+          },
+        },
+        {
+          id: 'fetch',
+          label: '抓取（Fetch）',
+          icon: React.createElement(Icon, { name: 'sync' }),
+          onSelect: () => doSync('fetch'),
+        },
+        { id: 'h2', label: '分支与远端', heading: true, separated: true },
+        {
+          id: 'switch',
+          label: '切换分支…',
+          icon: React.createElement(Icon, { name: 'branch' }),
+          onSelect: () => setBranchPicker({ x: rect.right, y: rect.bottom }),
+        },
+        {
+          id: 'stage',
+          label: '暂存全部更改',
+          icon: React.createElement(Icon, { name: 'plus' }),
+          disabled: state === null || state.changes.length + state.untracked.length === 0,
+          onSelect: () => {
+            if (state === null) return
+            const paths = [...state.changes, ...state.untracked].map((entry) => entry.path)
+            run('stage', () => api.stage(cwd, paths))
+          },
+        },
+        { id: 'remotes', label: '远程管理…', icon: React.createElement(Icon, { name: 'repo' }), onSelect: openRemotesMenu },
+        { id: 'h3', label: '其它', heading: true, separated: true },
+        { id: 'terminal', label: '打开 Git 终端', icon: React.createElement(Icon, { name: 'terminal' }), onSelect: () => setTab('terminal') },
+        { id: 'refresh', label: '刷新', icon: React.createElement(Icon, { name: 'refresh' }), onSelect: doManualRefresh },
+      ],
+    })
+  }
+
+  const openRemotesMenu = (): void => {
+    api
+      .remotes(cwd)
+      .then((result) => {
+        const items: MenuItem[] = [{ id: 'rh', label: '远程', heading: true }]
+        for (const remote of result.remotes) {
+          items.push({
+            id: `r:${remote.name}`,
+            label: remote.name,
+            hint: shortenUrl(remote.url),
+            onSelect: () => openRemoteEdit(remote),
+          })
+        }
+        if (result.remotes.length === 0) {
+          items.push({ id: 'none', label: '还没有配置远端', disabled: true })
+        }
+        items.push({
+          id: 'add',
+          label: '添加远端…',
+          separated: true,
+          icon: React.createElement(Icon, { name: 'plus' }),
+          onSelect: () => addRemoteFlow(),
+        })
+        setMenu({ x: Math.max(8, window.innerWidth / 2 - 110), y: 120, items })
+      })
+      .catch((err: unknown) => setFailure(err instanceof Error ? err.message : String(err)))
+  }
+
+  const shortenUrl = (url: string): string => {
+    const clean = url.replace(/\.git$/, '')
+    return clean.length > 28 ? `…${clean.slice(-27)}` : clean
+  }
+
+  const openRemoteEdit = (remote: RemoteInfo): void => {
+    setMenu({
+      x: Math.max(8, window.innerWidth / 2 - 110),
+      y: 120,
+      items: [
+        { id: 'h', label: remote.name, heading: true },
+        {
+          id: 'copy',
+          label: '复制远端地址',
+          onSelect: () => {
+            void copyText(remote.url).then((ok) => notify(ok ? '已复制远端地址' : '复制失败'))
+          },
+        },
+        {
+          id: 'url',
+          label: '修改地址…',
+          onSelect: () => {
+            const next = window.prompt(`修改 ${remote.name} 的 URL`, remote.url)
+            if (next === null || next.trim() === '' || next.trim() === remote.url) return
+            run('remote', () => api.setRemoteUrl(cwd, remote.name, next.trim()))
+          },
+        },
+        {
+          id: 'remove',
+          label: `删除远端 ${remote.name}`,
+          danger: true,
+          separated: true,
+          onSelect: () =>
+            setConfirm({
+              title: `删除远端 ${remote.name}`,
+              body: '这会移除本地对它的配置，不会影响远端服务器上的仓库。',
+              run: () => run('remote', () => api.removeRemote(cwd, remote.name)),
+            }),
+        },
+      ],
+    })
+  }
+
+  const addRemoteFlow = (): void => {
+    const name = window.prompt('新远端名称', 'origin')
+    if (name === null || name.trim() === '') return
+    const url = window.prompt('远端 URL（https 或 git@）', '')
+    if (url === null || url.trim() === '') return
+    run('remote', () => api.addRemote(cwd, name.trim(), url.trim()))
+  }
+
+  /* ---- commit context menu ---- */
+  const openCommitMenu = (event: React.MouseEvent, commit: CommitNode): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const behind = commit.sha !== state?.repo.head
+    setMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        { id: 'h', label: `${commit.short} · ${commit.subject.slice(0, 28)}`, heading: true },
+        {
+          id: 'copy-sha',
+          label: '复制提交哈希',
+          hint: 'SHA',
+          onSelect: () => {
+            void copyText(commit.sha).then((ok) => notify(ok ? '已复制哈希' : '复制失败'))
+          },
+        },
+        {
+          id: 'copy-msg',
+          label: '复制提交消息',
+          hint: 'message',
+          onSelect: () => {
+            void copyText(commit.subject).then((ok) => notify(ok ? '已复制提交消息' : '复制失败'))
+          },
+        },
+        {
+          id: 'revert',
+          label: '恢复至当前提交（生成反向提交）',
+          separated: true,
+          onSelect: () =>
+            run('commit-action', () =>
+              api.commitAction(cwd, commit.sha, 'revert').then((result) => notify(result.summary)),
+            ),
+        },
+        { id: 'h2', label: '重置（reset）', heading: true },
+        {
+          id: 'reset-soft',
+          label: '软重置到此提交',
+          hint: '保留暂存',
+          onSelect: () => runReset(commit, 'reset-soft'),
+        },
+        {
+          id: 'reset-mixed',
+          label: '混合重置到此提交',
+          hint: '保留工作区',
+          onSelect: () => runReset(commit, 'reset-mixed'),
+        },
+        {
+          id: 'reset-hard',
+          label: '硬重置到此提交',
+          hint: '丢弃改动',
+          danger: true,
+          onSelect: () => runReset(commit, 'reset-hard'),
+        },
+        {
+          id: 'rebase',
+          label: 'rebase 到此提交',
+          separated: true,
+          danger: true,
+          disabled: !behind,
+          onSelect: () =>
+            setConfirm({
+              title: `rebase 到 ${commit.short}`,
+              body: '当前分支的提交会被重放到这个提交之上，历史会被改写（已推送的提交需要强推）。',
+              run: () =>
+                run('commit-action', () =>
+                  api.commitAction(cwd, commit.sha, 'rebase').then((result) => notify(result.summary)),
+                ),
+            }),
+        },
+      ],
+    })
+  }
+
+  const runReset = (commit: CommitNode, action: CommitAction): void => {
+    const label = action === 'reset-soft' ? '软重置' : action === 'reset-mixed' ? '混合重置' : '硬重置'
+    const body =
+      action === 'reset-hard'
+        ? `工作区和暂存区的改动会全部丢弃，HEAD 会移动到 ${commit.short}。这个操作不能撤销。`
+        : action === 'reset-mixed'
+          ? `HEAD 会移动到 ${commit.short}，之后的提交取消暂存但内容留在工作区。`
+          : `HEAD 会移动到 ${commit.short}，之后的提交内容全部进入暂存区。`
+    setConfirm({
+      title: `${label}到 ${commit.short}`,
+      body,
+      run: () =>
+        run('commit-action', () => api.commitAction(cwd, commit.sha, action).then((result) => notify(result.summary))),
+    })
+  }
+
+  /* ---- rows ---- */
   const rowView = (entry: StatusEntry): React.ReactElement => {
     const { dir, base } = splitPath(entry.path)
     const isStaged = entry.kind === 'staged'
@@ -543,7 +893,7 @@ function Popup(props: PopupProps): React.ReactElement {
         stat !== undefined && changed > 0
           ? React.createElement(
               'span',
-              { className: 'dshg-rowstat', title: `+${stat.added} −${stat.removed}` },
+              { className: 'dshg-rowstat' },
               React.createElement('span', { className: 'dshg-add' }, `+${stat.added}`),
               React.createElement('span', { className: 'dshg-del' }, `−${stat.removed}`),
             )
@@ -634,76 +984,337 @@ function Popup(props: PopupProps): React.ReactElement {
     )
   }
 
+  /* ---- diff for a working-tree file ---- */
+  const [diffPayload, setDiffPayload] = React.useState<DiffPayload | null>(null)
+  const [diffError, setDiffError] = React.useState('')
+  const [diffLoading, setDiffLoading] = React.useState(false)
+  React.useEffect(() => {
+    if (selected === null) {
+      setDiffPayload(null)
+      setDiffError('')
+      return undefined
+    }
+    let alive = true
+    setDiffLoading(true)
+    setDiffError('')
+    setDiffPayload(null)
+    api
+      .diff(cwd, selected.path, selected.kind === 'staged', selected.from)
+      .then((next) => {
+        if (alive) setDiffPayload(next)
+      })
+      .catch((err: unknown) => {
+        if (alive) setDiffError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (alive) setDiffLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [cwd, selected])
+
+  /* ---- commit detail loader ---- */
+  React.useEffect(() => {
+    if (commitSha === '') {
+      setDetail(null)
+      return undefined
+    }
+    let alive = true
+    api
+      .commitDetail(cwd, commitSha)
+      .then((result) => {
+        if (alive) setDetail(result.commit)
+      })
+      .catch(() => {
+        if (alive) setDetail(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [cwd, commitSha])
+
+  /* ---- graph ---- */
   const graphRows = state === null ? [] : layoutGraph(state.commits)
-  const lanes = graphRows.reduce((max, row) => Math.max(max, row.laneCount), 1)
+  const laneTotal = graphRows.reduce((max, row) => Math.max(max, row.laneCount), 1)
   const commitBySha = new Map<string, CommitNode>()
   if (state !== null) for (const commit of state.commits) commitBySha.set(commit.sha, commit)
 
-  const graphSection =
-    state !== null && graphRows.length > 0
+  const clickCommit = (commit: CommitNode): void => {
+    setCommitSha((prev) => (prev === commit.sha ? '' : commit.sha))
+  }
+
+  /* ---- layout ---- */
+  const position = (): React.CSSProperties => {
+    const width = 480
+    if (anchor === null || typeof window === 'undefined') return { top: 64, right: 16, width }
+    const right = Math.max(12, Math.min(window.innerWidth - width - 12, window.innerWidth - anchor.right))
+    const top = Math.max(12, Math.min(anchor.bottom + 8, window.innerHeight - 320))
+    return { top, right, width }
+  }
+
+  const banner =
+    failure !== ''
       ? React.createElement(
           'div',
-          { className: 'dshg-section dshg-graph', key: 'graph' },
+          { className: 'dshg-err' },
+          failure,
           React.createElement(
-            'div',
-            {
-              className: 'dshg-sechead',
-              role: 'button',
-              tabIndex: 0,
-              onClick: () => setOpen((prev) => ({ ...prev, graph: !prev.graph })),
-              onKeyDown: (event: React.KeyboardEvent) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  setOpen((prev) => ({ ...prev, graph: !prev.graph }))
-                }
-              },
-            },
-            React.createElement(
-              'span',
-              { className: 'dshg-caret', 'data-open': open.graph },
-              React.createElement(Icon, { name: 'chevron' }),
-            ),
-            React.createElement('span', { className: 'dshg-sectitle' }, '图表'),
-            React.createElement('span', { className: 'dshg-count' }, state.commits.length),
-            React.createElement(
-              'span',
-              { className: 'dshg-secactions' },
-              React.createElement('span', { className: 'dshg-gsha', title: '当前分支' }, state.repo.branch),
-            ),
+            'button',
+            { type: 'button', className: 'dshg-err-close', onClick: () => setFailure('') },
+            '×',
           ),
-          open.graph
+        )
+      : repo.error !== ''
+        ? React.createElement('div', { className: 'dshg-err' }, repo.error)
+        : null
+
+  const tabButton = (id: Tab, label: string, count?: number): React.ReactElement =>
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        role: 'tab',
+        'aria-selected': tab === id,
+        className: `dshg-tab${tab === id ? ' dshg-tab-on' : ''}`,
+        onClick: () => setTab(id),
+      },
+      label,
+      count === undefined ? null : React.createElement('span', { className: 'dshg-count' }, count),
+    )
+
+  const behind = state?.repo.behind ?? 0
+  const ahead = state?.repo.ahead ?? 0
+
+  const bodyForTab = (): React.ReactNode => {
+    if (tab === 'terminal') return React.createElement(Terminal, { cwd, active: tab === 'terminal' })
+    if (repo.loading && state === null) return React.createElement('div', { className: 'dshg-loading' }, '正在读取仓库…')
+
+    if (tab === 'changes') {
+      if (state === null) return null
+      const clean = state.staged.length + state.changes.length + state.untracked.length === 0
+      return React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(
+          'div',
+          { className: 'dshg-list' },
+          clean
             ? React.createElement(
                 'div',
-                null,
-                ...graphRows.map((row) => {
-                  const commit = commitBySha.get(row.sha)
-                  return commit === undefined
-                    ? null
-                    : React.createElement(GraphRowView, { key: row.sha, commit, row, lanes })
-                }),
+                { className: 'dshg-empty' },
+                React.createElement(Icon, { name: 'check' }),
+                React.createElement('div', { className: 'dshg-empty-title' }, '没有更改'),
+                React.createElement(
+                  'div',
+                  { className: 'dshg-empty-body' },
+                  state.repo.empty ? '这个仓库还没有提交。' : '工作区是干净的。',
+                ),
               )
             : null,
-        )
-      : null
+          section(
+            'staged',
+            '暂存的更改',
+            state.staged,
+            state.staged.length > 0
+              ? React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-mini',
+                    title: '全部取消暂存',
+                    onClick: (event: React.MouseEvent) => {
+                      event.stopPropagation()
+                      run('unstage', () => api.unstage(cwd, state.staged.map((entry) => entry.path)))
+                    },
+                  },
+                  React.createElement(Icon, { name: 'minus' }),
+                )
+              : null,
+          ),
+          section(
+            'changes',
+            '更改',
+            state.changes,
+            state.changes.length > 0
+              ? React.createElement(
+                  React.Fragment,
+                  null,
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dshg-mini',
+                      title: '放弃全部更改',
+                      onClick: (event: React.MouseEvent) => {
+                        event.stopPropagation()
+                        run('discard', () => api.discard(cwd, state.changes.map((entry) => entry.path)))
+                      },
+                    },
+                    React.createElement(Icon, { name: 'undo' }),
+                  ),
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dshg-mini',
+                      title: '全部暂存',
+                      onClick: (event: React.MouseEvent) => {
+                        event.stopPropagation()
+                        run('stage', () => api.stage(cwd, state.changes.map((entry) => entry.path)))
+                      },
+                    },
+                    React.createElement(Icon, { name: 'plus' }),
+                  ),
+                )
+              : null,
+          ),
+          section(
+            'untracked',
+            '未跟踪',
+            state.untracked,
+            state.untracked.length > 0
+              ? React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-mini',
+                    title: '暂存全部未跟踪文件',
+                    onClick: (event: React.MouseEvent) => {
+                      event.stopPropagation()
+                      run('stage', () => api.stage(cwd, state.untracked.map((entry) => entry.path)))
+                    },
+                  },
+                  React.createElement(Icon, { name: 'plus' }),
+                )
+              : null,
+          ),
+        ),
+        selected === null
+          ? null
+          : React.createElement(
+              'div',
+              { className: 'dshg-diff' },
+              React.createElement(
+                'div',
+                { className: 'dshg-diffhead' },
+                React.createElement(Icon, { name: 'file' }),
+                React.createElement('span', { className: 'dshg-diffpath', title: selected.path }, selected.path),
+                diffPayload !== null && !diffPayload.binary
+                  ? React.createElement(
+                      'span',
+                      { className: 'dshg-rowstat' },
+                      React.createElement('span', { className: 'dshg-add' }, `+${diffPayload.added}`),
+                      React.createElement('span', { className: 'dshg-del' }, `−${diffPayload.removed}`),
+                    )
+                  : null,
+                React.createElement('span', { className: 'dshg-spacer' }),
+                React.createElement(
+                  'button',
+                  { type: 'button', className: 'dshg-mini', title: '关闭差异', onClick: () => setSelected(null) },
+                  React.createElement(Icon, { name: 'close' }),
+                ),
+              ),
+              React.createElement(
+                'div',
+                { className: 'dshg-diffbody' },
+                diffLoading ? React.createElement('div', { className: 'dshg-diffempty' }, '正在读取差异…') : null,
+                !diffLoading && diffError !== '' ? React.createElement('div', { className: 'dshg-diffempty' }, diffError) : null,
+                !diffLoading && diffPayload !== null && diffPayload.binary
+                  ? React.createElement('div', { className: 'dshg-diffempty' }, '二进制文件，无法以文本显示差异')
+                  : null,
+                !diffLoading && diffPayload !== null && !diffPayload.binary
+                  ? React.createElement(DiffBody, { patch: diffPayload.patch })
+                  : null,
+                diffPayload?.tooLarge === true
+                  ? React.createElement('div', { className: 'dshg-diffempty' }, '差异过大，仅显示前 60 万字符')
+                  : null,
+              ),
+            ),
+      )
+    }
 
-  const banner = failure !== ''
-    ? React.createElement('div', { className: 'dshg-err' }, failure)
-    : repo.error !== ''
-      ? React.createElement('div', { className: 'dshg-err' }, repo.error)
-      : null
-
-  const cleanMessage = (): React.ReactElement =>
-    React.createElement(
+    // graph
+    if (state === null) return null
+    return React.createElement(
       'div',
-      { className: 'dshg-empty' },
-      React.createElement(Icon, { name: 'check' }),
-      React.createElement('div', { className: 'dshg-empty-title' }, '没有更改'),
+      { className: 'dshg-list dshg-list-graph' },
       React.createElement(
         'div',
-        { className: 'dshg-empty-body' },
-        state?.repo.empty === true ? '这个仓库还没有提交。' : '工作区是干净的。',
+        { className: 'dshg-sechead dshg-static' },
+        React.createElement('span', { className: 'dshg-sectitle' }, '图表'),
+        React.createElement('span', { className: 'dshg-count' }, state.commits.length),
+        React.createElement('span', { className: 'dshg-secactions' },
+          React.createElement('span', { className: 'dshg-gsha' }, state.repo.branch),
+        ),
       ),
+      ...graphRows.map((row) => {
+        const commit = commitBySha.get(row.sha)
+        if (commit === undefined) return null
+        const head = commit.sha === state.repo.head
+        return React.createElement(
+          'div',
+          {
+            key: row.sha,
+            className: `dshg-grow${head ? ' dshg-grow-head' : ''}${commitSha === commit.sha ? ' dshg-grow-on' : ''}`,
+            role: 'button',
+            tabIndex: 0,
+            title: `${commit.sha}\n${commit.author}\n${commit.subject}`,
+            onClick: () => clickCommit(commit),
+            onContextMenu: (event: React.MouseEvent) => openCommitMenu(event, commit),
+            onKeyDown: (event: React.KeyboardEvent) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                clickCommit(commit)
+              }
+            },
+          },
+          React.createElement(GraphLanes, { row, lanes: laneTotal }),
+          React.createElement(
+            'span',
+            { className: 'dshg-gmeta' },
+            ...commit.refs.slice(0, 3).map((ref, index) =>
+              React.createElement(
+                'span',
+                { key: `${ref}-${index}`, className: 'dshg-gref', 'data-kind': refKind(ref) },
+                refLabel(ref),
+              ),
+            ),
+            React.createElement('span', { className: 'dshg-gsubject' }, commit.subject === '' ? '(no message)' : commit.subject),
+          ),
+          React.createElement(
+            'span',
+            { className: 'dshg-gside' },
+            React.createElement('span', { className: 'dshg-gsha' }, commit.short),
+            React.createElement('span', null, relativeTime(commit.time)),
+          ),
+        )
+      }),
     )
+  }
+
+  const commitPanel =
+    commitSha !== '' && tab === 'graph'
+      ? detail !== null
+        ? React.createElement(CommitDetailView, { cwd, sha: commitSha, onClose: () => setCommitSha('') })
+        : React.createElement(
+            'div',
+            { className: 'dshg-diff' },
+            React.createElement(
+              'div',
+              { className: 'dshg-diffhead' },
+              React.createElement(Icon, { name: 'commit' }),
+              React.createElement('span', { className: 'dshg-diffpath' }, `提交 ${commitSha.slice(0, 7)}`),
+              React.createElement('span', { className: 'dshg-spacer' }),
+              React.createElement(
+                'button',
+                { type: 'button', className: 'dshg-mini', title: '关闭', onClick: () => setCommitSha('') },
+                React.createElement(Icon, { name: 'close' }),
+              ),
+            ),
+            React.createElement('div', { className: 'dshg-diffbody' }, React.createElement('div', { className: 'dshg-diffempty' }, '正在读取提交…')),
+          )
+      : null
 
   return React.createElement(
     React.Fragment,
@@ -724,29 +1335,37 @@ function Popup(props: PopupProps): React.ReactElement {
         style: { position: 'fixed', zIndex: 2147482001, ...position() },
         onClick: (event: React.MouseEvent) => event.stopPropagation(),
       },
+
+      /* ---- header ---- */
       React.createElement(
         'div',
         { className: 'dshg-head' },
         React.createElement('span', { className: 'dshg-title' }, React.createElement(Icon, { name: 'git' }), '源代码管理'),
         state !== null
           ? React.createElement(
-              'span',
-              { className: 'dshg-repo', title: state.repo.root },
-              React.createElement('span', null, state.repo.name),
-              React.createElement(
-                'span',
-                {
-                  className: 'dshg-branch',
-                  title: state.repo.upstream === '' ? state.repo.branch : `跟踪 ${state.repo.upstream}`,
+              'button',
+              {
+                type: 'button',
+                className: 'dshg-branch dshg-branch-btn',
+                title: `当前分支 ${state.repo.branch}${state.repo.upstream === '' ? '' : `（跟踪 ${state.repo.upstream}）`}\n点击切换分支`,
+                onClick: (event) => {
+                  const rect = event.currentTarget.getBoundingClientRect()
+                  setBranchPicker({ x: rect.right, y: rect.bottom })
                 },
-                React.createElement(Icon, { name: 'branch' }),
-                state.repo.branch,
-              ),
-              state.repo.ahead > 0 || state.repo.behind > 0
-                ? React.createElement('span', { className: 'dshg-ahead' }, `↑${state.repo.ahead} ↓${state.repo.behind}`)
-                : null,
+              },
+              React.createElement(Icon, { name: 'branch' }),
+              state.repo.branch,
+              state.repo.detached ? React.createElement('span', { className: 'dshg-branch-tag' }, 'detached') : null,
             )
           : React.createElement('span', { className: 'dshg-repo' }, cwd === '' ? '未绑定工作目录' : cwd),
+        state !== null && (ahead > 0 || behind > 0)
+          ? React.createElement(
+              'span',
+              { className: 'dshg-ahead', title: `领先 ${ahead} / 落后 ${behind}${state.repo.upstream === '' ? '（无上游）' : ` · ${state.repo.upstream}`}` },
+              ahead > 0 ? React.createElement('span', { className: 'dshg-ahead-up' }, `↑${ahead}`) : null,
+              behind > 0 ? React.createElement('span', { className: 'dshg-ahead-down' }, `↓${behind}`) : null,
+            )
+          : null,
         React.createElement('span', { className: 'dshg-spacer' }),
         React.createElement(
           'button',
@@ -755,9 +1374,20 @@ function Popup(props: PopupProps): React.ReactElement {
             className: `dshg-iconbtn${repo.loading ? ' dshg-spinning' : ''}`,
             title: '刷新',
             disabled: repo.loading,
-            onClick: () => repo.refresh(false),
+            onClick: doManualRefresh,
           },
           React.createElement(Icon, { name: 'refresh' }),
+        ),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'dshg-iconbtn',
+            title: '更多操作',
+            'aria-haspopup': 'menu',
+            onClick: openMainMenu,
+          },
+          React.createElement(Icon, { name: 'dots' }),
         ),
         React.createElement(
           'button',
@@ -765,8 +1395,20 @@ function Popup(props: PopupProps): React.ReactElement {
           React.createElement(Icon, { name: 'close' }),
         ),
       ),
+
       banner,
-      cwd !== ''
+
+      /* ---- tabs ---- */
+      React.createElement(
+        'div',
+        { className: 'dshg-tabs', role: 'tablist' },
+        tabButton('changes', '更改', state === null ? undefined : state.staged.length + state.changes.length + state.untracked.length),
+        tabButton('graph', '图表', state === null ? undefined : state.commits.length),
+        tabButton('terminal', '终端'),
+      ),
+
+      /* ---- commit box ---- */
+      tab === 'changes' && cwd !== ''
         ? React.createElement(
             'div',
             { className: 'dshg-commit' },
@@ -784,7 +1426,6 @@ function Popup(props: PopupProps): React.ReactElement {
                 }
               },
             }),
-            // 和 VS Code 一样：提交按钮铺满一行，右侧带一个「更多提交选项」的箭头。
             React.createElement(
               'div',
               { className: 'dshg-commitrow' },
@@ -793,7 +1434,7 @@ function Popup(props: PopupProps): React.ReactElement {
                 {
                   type: 'button',
                   className: 'dshg-primary',
-                  disabled: !canCommit,
+                  disabled: busy !== '' || (stagedCount === 0 && !amend) || message.trim() === '',
                   title: stagedCount === 0 ? '先暂存要提交的文件' : '提交（Ctrl+Enter）',
                   onClick: doCommit,
                 },
@@ -834,117 +1475,76 @@ function Popup(props: PopupProps): React.ReactElement {
             ),
           )
         : null,
+
+      /* ---- body ---- */
       React.createElement(
         'div',
         { className: 'dshg-body' },
-        repo.loading && state === null ? React.createElement('div', { className: 'dshg-loading' }, '正在读取仓库…') : null,
-        state !== null &&
-        state.staged.length + state.changes.length + state.untracked.length === 0
-          ? cleanMessage()
-          : null,
-        state !== null
-          ? React.createElement(
-              React.Fragment,
-              null,
-              // 列表自己滚（和 VS Code 一样），diff 固定在下方，打开文件不会把上面的列表顶走。
-              React.createElement(
-                'div',
-                { className: 'dshg-list' },
-                section(
-                  'staged',
-                  '暂存的更改',
-                  state.staged,
-                  state.staged.length > 0
-                    ? React.createElement(
-                        'button',
-                        {
-                          type: 'button',
-                          className: 'dshg-mini',
-                          title: '全部取消暂存',
-                          onClick: (event: React.MouseEvent) => {
-                            event.stopPropagation()
-                            run('unstage', () => api.unstage(cwd, state.staged.map((entry) => entry.path)))
-                          },
-                        },
-                        React.createElement(Icon, { name: 'minus' }),
-                      )
-                    : null,
-                ),
-                section(
-                  'changes',
-                  '更改',
-                  state.changes,
-                  state.changes.length > 0
-                    ? React.createElement(
-                        React.Fragment,
-                        null,
-                        React.createElement(
-                          'button',
-                          {
-                            type: 'button',
-                            className: 'dshg-mini',
-                            title: '放弃全部更改',
-                            onClick: (event: React.MouseEvent) => {
-                              event.stopPropagation()
-                              run('discard', () => api.discard(cwd, state.changes.map((entry) => entry.path)))
-                            },
-                          },
-                          React.createElement(Icon, { name: 'undo' }),
-                        ),
-                        React.createElement(
-                          'button',
-                          {
-                            type: 'button',
-                            className: 'dshg-mini',
-                            title: '全部暂存',
-                            onClick: (event: React.MouseEvent) => {
-                              event.stopPropagation()
-                              run('stage', () => api.stage(cwd, state.changes.map((entry) => entry.path)))
-                            },
-                          },
-                          React.createElement(Icon, { name: 'plus' }),
-                        ),
-                      )
-                    : null,
-                ),
-                section(
-                  'untracked',
-                  '未跟踪',
-                  state.untracked,
-                  state.untracked.length > 0
-                    ? React.createElement(
-                        'button',
-                        {
-                          type: 'button',
-                          className: 'dshg-mini',
-                          title: '暂存全部未跟踪文件',
-                          onClick: (event: React.MouseEvent) => {
-                            event.stopPropagation()
-                            run('stage', () => api.stage(cwd, state.untracked.map((entry) => entry.path)))
-                          },
-                        },
-                        React.createElement(Icon, { name: 'plus' }),
-                      )
-                    : null,
-                ),
-                graphSection,
-              ),
-              selected !== null
-                ? React.createElement(DiffView, { cwd, entry: selected, onClose: () => setSelected(null) })
-                : null,
-            )
-          : null,
+        React.createElement('div', { className: 'dshg-pane' }, bodyForTab()),
+        commitPanel,
       ),
+
+      /* ---- footer ---- */
       React.createElement(
         'div',
         { className: 'dshg-foot' },
+        React.createElement('span', { title: state?.repo.upstream === '' ? '没有上游分支' : `跟踪 ${state?.repo.upstream}` },
+          state === null || state.repo.upstream === '' ? '无上游' : state.repo.upstream),
         React.createElement('span', null, '更改 ', React.createElement('b', null, String((state?.changes.length ?? 0) + (state?.untracked.length ?? 0)))),
         React.createElement('span', null, '暂存 ', React.createElement('b', null, String(stagedCount))),
-        React.createElement('span', null, 'HEAD ', React.createElement('b', null, state === null || state.repo.head === '' ? '—' : state.repo.head)),
         React.createElement('span', { className: 'dshg-spacer' }),
-        React.createElement('span', null, busy === '' ? 'Ctrl+Enter 提交' : `${busy}…`),
+        React.createElement('span', null, busy === '' ? '右键提交可复制/重置' : `${busy}…`),
       ),
     ),
+
+    /* ---- floating layers ---- */
+    menu !== null
+      ? React.createElement(Menu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) })
+      : null,
+    branchPicker !== null
+      ? React.createElement(BranchPicker, {
+          cwd,
+          current: state?.repo.branch ?? '',
+          x: branchPicker.x,
+          y: branchPicker.y,
+          onClose: () => setBranchPicker(null),
+          onSwitched: () => repo.refresh(false),
+        })
+      : null,
+    confirm !== null
+      ? React.createElement(
+          'div',
+          { className: 'dshg-confirm-mask', onClick: () => setConfirm(null) },
+          React.createElement(
+            'div',
+            { className: 'dshg-confirm', onClick: (event: React.MouseEvent) => event.stopPropagation() },
+            React.createElement('div', { className: 'dshg-confirm-title' }, confirm.title),
+            React.createElement('div', { className: 'dshg-confirm-body' }, confirm.body),
+            React.createElement(
+              'div',
+              { className: 'dshg-confirm-actions' },
+              React.createElement(
+                'button',
+                { type: 'button', className: 'dshg-ghost', onClick: () => setConfirm(null) },
+                '取消',
+              ),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-danger-btn',
+                  onClick: () => {
+                    const task = confirm.run
+                    setConfirm(null)
+                    task()
+                  },
+                },
+                '确认执行',
+              ),
+            ),
+          ),
+        )
+      : null,
   )
 }
 
@@ -1023,6 +1623,4 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
   )
 }
 
-/** Kept for the theme contract: every exported surface declares its lane. */
-export const SURFACE = 'scm'
 export { laneColor }

@@ -6,29 +6,54 @@
  *   GET  /wagq-git/api/state?cwd=          repo info + porcelain status + commit graph
  *   GET  /wagq-git/api/diff?cwd&path&staged
  *   GET  /wagq-git/api/message?cwd         a suggested commit message
+ *   GET  /wagq-git/api/branches?cwd        local + remote branches with divergence
+ *   GET  /wagq-git/api/remotes?cwd         configured remotes
+ *   GET  /wagq-git/api/commit?cwd&sha      one commit's metadata, files and patch
  *   POST /wagq-git/api/stage               { cwd, paths }
  *   POST /wagq-git/api/unstage             { cwd, paths }
  *   POST /wagq-git/api/discard             { cwd, paths }
  *   POST /wagq-git/api/commit              { cwd, message, amend?, signoff? }
+ *   POST /wagq-git/api/sync                { cwd, action: fetch|pull|push, remote?, branch?, setUpstream?, force? }
+ *   POST /wagq-git/api/checkout            { cwd, target, create? }
+ *   POST /wagq-git/api/branch-delete       { cwd, name, force? }
+ *   POST /wagq-git/api/remote-add          { cwd, name, url }
+ *   POST /wagq-git/api/remote-remove       { cwd, name }
+ *   POST /wagq-git/api/remote-url          { cwd, name, url }
+ *   POST /wagq-git/api/commit-action       { cwd, sha, action: revert|reset-soft|reset-mixed|reset-hard|rebase }
+ *   POST /wagq-git/api/terminal            { cwd, command }   ← the embedded git terminal
  *
- * Everything is executed with an argv array (never a shell string), and every
- * directory is resolved + validated before git is asked about it, so a crafted
- * `cwd` cannot walk into a directory the request did not name.
+ * git itself is executed with an argv array (never a shell string), and every
+ * directory is resolved + validated before git is asked about it. The terminal
+ * route is the one deliberate exception: the user types a command line, so it
+ * runs through a shell with the repo as the working directory — that is what
+ * makes pipes, redirects and `&&` behave like a terminal.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HostContext, SessionsService } from './host-context.js'
 import {
   GitError,
+  addRemote,
+  branches,
+  checkout,
   commit,
+  commitAction,
+  commitDetail,
+  deleteBranch,
   diff,
   discard,
   graph,
+  remotes,
+  removeRemote,
   resolveRepoDir,
+  setRemoteUrl,
   stage,
   status,
   suggestMessage,
+  sync,
+  terminalRun,
   unstage,
 } from './git.js'
+import type { CommitAction } from './git.js'
 
 export const name = 'wagq-dsh-git'
 
@@ -47,7 +72,20 @@ interface Body {
   signoff?: unknown
   path?: unknown
   staged?: unknown
+  action?: unknown
+  remote?: unknown
+  branch?: unknown
+  target?: unknown
+  name?: unknown
+  url?: unknown
+  sha?: unknown
+  force?: unknown
+  create?: unknown
+  setUpstream?: unknown
+  command?: unknown
 }
+
+const COMMIT_ACTIONS = new Set<CommitAction>(['revert', 'reset-soft', 'reset-mixed', 'reset-hard', 'rebase'])
 
 function header(req: IncomingMessage, key: string): string {
   const value = req.headers[key]
@@ -232,6 +270,34 @@ export function apply(ctx: HostContext) {
           return
         }
 
+        if (url.pathname === `${PREFIX}/api/branches`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          sendJson(res, 200, { ok: true, branches: await branches(cwd) })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/remotes`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          sendJson(res, 200, { ok: true, remotes: await remotes(cwd) })
+          return
+        }
+
+        // `/api/commit` answers both: GET reads a commit's detail, POST creates one.
+        if (url.pathname === `${PREFIX}/api/commit` && req.method === 'GET') {
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const sha = requiredString(url.searchParams.get('sha'), 'sha')
+          sendJson(res, 200, { ok: true, commit: await commitDetail(cwd, sha) })
+          return
+        }
+
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: 'method not allowed' })
           return
@@ -260,6 +326,67 @@ export function apply(ctx: HostContext) {
             amend: body.amend === true,
             signoff: body.signoff === true,
           })
+          sendJson(res, 200, { ok: true, ...result })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/sync`) {
+          const action = requiredString(body.action, 'action')
+          if (action !== 'fetch' && action !== 'pull' && action !== 'push') {
+            throw new GitError('action 只能是 fetch / pull / push', 400)
+          }
+          const result = await sync(cwd, action, {
+            remote: typeof body.remote === 'string' ? body.remote : '',
+            branch: typeof body.branch === 'string' ? body.branch : '',
+            setUpstream: body.setUpstream === true,
+            force: body.force === true,
+          })
+          sendJson(res, 200, { ...result, ok: true })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/checkout`) {
+          const target = requiredString(body.target, 'target')
+          const branch = await checkout(cwd, target, { create: body.create === true })
+          sendJson(res, 200, { ok: true, branch })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/branch-delete`) {
+          await deleteBranch(cwd, requiredString(body.name, 'name'), body.force === true)
+          sendJson(res, 200, { ok: true })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/remote-add`) {
+          await addRemote(cwd, requiredString(body.name, 'name'), requiredString(body.url, 'url'))
+          sendJson(res, 200, { ok: true })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/remote-remove`) {
+          await removeRemote(cwd, requiredString(body.name, 'name'))
+          sendJson(res, 200, { ok: true })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/remote-url`) {
+          await setRemoteUrl(cwd, requiredString(body.name, 'name'), requiredString(body.url, 'url'))
+          sendJson(res, 200, { ok: true })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/commit-action`) {
+          const action = requiredString(body.action, 'action') as CommitAction
+          if (!COMMIT_ACTIONS.has(action)) throw new GitError('不支持的操作', 400)
+          const result = await commitAction(cwd, requiredString(body.sha, 'sha'), action)
+          sendJson(res, 200, { ...result, ok: true })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/terminal`) {
+          const command = requiredString(body.command, 'command')
+          const result = await terminalRun(cwd, command)
           sendJson(res, 200, { ok: true, ...result })
           return
         }

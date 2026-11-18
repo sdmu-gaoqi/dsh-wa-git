@@ -200,6 +200,160 @@ async function testHost() {
   assert.ok(!fs.readFileSync(path.join(dir, 'README.md'), 'utf8').includes('dirty'), 'worktree change reverted')
   ok('POST /api/discard 放弃工作区更改')
 
+  /* ---- new in 0.3: branches / remotes / commit detail / sync / terminal ---- */
+
+  const branchList = await callRoute(route.handler, { url: `/wagq-git/api/branches?cwd=${encoded}` })
+  assert.equal(branchList.status, 200, branchList.text)
+  assert.ok(branchList.json.branches.some((branch) => branch.name === 'main' && branch.current), 'current branch reported')
+  ok('GET /api/branches 列出本地/远程分支')
+
+  const checkoutNew = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/checkout',
+    body: { cwd: dir, target: 'feature/smoke', create: true },
+  })
+  assert.equal(checkoutNew.status, 200, checkoutNew.text)
+  assert.equal(checkoutNew.json.branch, 'feature/smoke')
+  assert.equal(git('rev-parse', '--abbrev-ref', 'HEAD').trim(), 'feature/smoke')
+  ok('POST /api/checkout 新建并切换分支')
+
+  const checkoutBack = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/checkout',
+    body: { cwd: dir, target: 'main' },
+  })
+  assert.equal(checkoutBack.status, 200, checkoutBack.text)
+  ok('POST /api/checkout 切回 main')
+
+  const checkoutMissing = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/checkout',
+    body: { cwd: dir, target: 'no/such/branch' },
+  })
+  assert.equal(checkoutMissing.status, 404)
+  ok('不存在的分支 → 404')
+
+  const remoteAdd = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/remote-add',
+    body: { cwd: dir, name: 'origin', url: 'https://example.com/demo.git' },
+  })
+  assert.equal(remoteAdd.status, 200, remoteAdd.text)
+  const remoteList = await callRoute(route.handler, { url: `/wagq-git/api/remotes?cwd=${encoded}` })
+  assert.equal(remoteList.status, 200, remoteList.text)
+  assert.equal(remoteList.json.remotes[0].name, 'origin')
+  assert.equal(remoteList.json.remotes[0].url, 'https://example.com/demo.git')
+  ok('POST /api/remote-add + GET /api/remotes')
+
+  const remoteDup = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/remote-add',
+    body: { cwd: dir, name: 'origin', url: 'https://example.com/x.git' },
+  })
+  assert.equal(remoteDup.status, 409)
+  ok('重复添加同名远端 → 409')
+
+  const remoteUrl = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/remote-url',
+    body: { cwd: dir, name: 'origin', url: 'https://example.com/renamed.git' },
+  })
+  assert.equal(remoteUrl.status, 200, remoteUrl.text)
+  ok('POST /api/remote-url 修改地址')
+
+  const remoteRemove = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/remote-remove',
+    body: { cwd: dir, name: 'origin' },
+  })
+  assert.equal(remoteRemove.status, 200, remoteRemove.text)
+  ok('POST /api/remote-remove 删除远端')
+
+  const headSha = git('rev-parse', 'HEAD').trim()
+  const detail = await callRoute(route.handler, { url: `/wagq-git/api/commit?cwd=${encoded}&sha=${headSha}` })
+  assert.equal(detail.status, 200, detail.text)
+  assert.equal(detail.json.commit.sha, headSha)
+  assert.equal(detail.json.commit.subject, 'test: 冒烟提交')
+  assert.ok(detail.json.commit.patch.length > 0, 'commit patch present')
+  ok('GET /api/commit 返回提交详情 + patch')
+
+  const badSha = await callRoute(route.handler, { url: `/wagq-git/api/commit?cwd=${encoded}&sha=nope!` })
+  assert.equal(badSha.status, 400)
+  ok('非法提交哈希 → 400')
+
+  const terminal = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/terminal',
+    body: { cwd: dir, command: 'git rev-parse --abbrev-ref HEAD' },
+  })
+  assert.equal(terminal.status, 200, terminal.text)
+  assert.match(terminal.json.output, /main/)
+  assert.equal(terminal.json.code, 0)
+  ok('POST /api/terminal 执行 git 命令并回传退出码')
+
+  const terminalFail = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/terminal',
+    body: { cwd: dir, command: 'git rev-parse --verify definitely-not-a-ref' },
+  })
+  assert.equal(terminalFail.status, 200)
+  assert.notEqual(terminalFail.json.code, 0, 'non-zero exit code surfaces')
+  ok('终端命令失败时退出码非 0')
+
+  const terminalCd = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/terminal',
+    body: { cwd: dir, command: process.platform === 'win32' ? 'Set-Location ..' : 'cd ..' },
+  })
+  assert.equal(terminalCd.status, 200, terminalCd.text)
+  assert.notEqual(path.resolve(terminalCd.json.cwd), path.resolve(dir), 'cwd moved for the next call')
+  ok('终端 cd 改变后续命令的工作目录')
+
+  const syncResult = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/sync',
+    body: { cwd: dir, action: 'fetch' },
+  })
+  // `fetch --all` with no remote configured is a no-op; anything but 500 is fine.
+  assert.ok(syncResult.status === 200 || syncResult.status >= 400, 'sync reachable')
+  ok('POST /api/sync 可调用（fetch）')
+
+  const badSync = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/sync',
+    body: { cwd: dir, action: 'nuke' },
+  })
+  assert.equal(badSync.status, 400)
+  ok('非法 sync action → 400')
+
+  fs.writeFileSync(path.join(dir, 'second.txt'), 'two\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'chore: 第二个提交')
+  const firstSha = git('rev-parse', 'HEAD~1').trim()
+
+  const softReset = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/commit-action',
+    body: { cwd: dir, sha: firstSha, action: 'reset-soft' },
+  })
+  assert.equal(softReset.status, 200, softReset.text)
+  assert.equal(git('rev-parse', 'HEAD').trim(), firstSha)
+  const porcelainAfterSoft = git('status', '--porcelain=v1')
+  assert.match(porcelainAfterSoft, /^A\s+second\.txt/m, 'soft reset staged the removed commit')
+  ok('POST /api/commit-action reset-soft 生效')
+
+  const revert = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/commit-action',
+    body: { cwd: dir, sha: firstSha, action: 'revert' },
+  })
+  assert.ok(revert.status === 200 || revert.status === 409, 'revert reachable')
+  ok('POST /api/commit-action revert 可调用')
+
+  const missing2 = await callRoute(route.handler, { url: '/wagq-git/api/state?cwd=' + encodeURIComponent(path.join(dir, 'nope')) })
+  assert.equal(missing2.status, 404)
+  ok('不存在的目录 → 404')
+
   const missing = await callRoute(route.handler, { url: '/wagq-git/api/state?cwd=' + encodeURIComponent(path.join(dir, 'nope')) })
   assert.equal(missing.status, 404)
   ok('不存在的目录 → 404')

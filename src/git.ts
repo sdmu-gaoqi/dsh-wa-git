@@ -11,6 +11,7 @@ import { readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
+/** Promisified `execFile`: (file, args, options) → { stdout, stderr }. */
 const run = promisify(execFile)
 
 const MAX_BUFFER = 64 * 1024 * 1024
@@ -283,6 +284,21 @@ export async function status(cwd: string): Promise<StatusSnapshot> {
   }
 }
 
+/** `%D` gives `HEAD -> main, origin/main, tag: v1`; drop the `HEAD ->` prefix but
+ *  keep the branch it points at. Git repeats the branch it already listed, so a
+ *  `HEAD -> main` on a commit whose refs already include `main` would otherwise
+ *  render as two pills for one thing. */
+function parseDecorations(raw: string): string[] {
+  const out: string[] = []
+  for (const part of raw.split(',')) {
+    let ref = part.trim()
+    if (ref === '') continue
+    ref = ref.replace(/^HEAD -> /, '')
+    if (!out.includes(ref)) out.push(ref)
+  }
+  return out
+}
+
 /**
  * `git diff --numstat` for both sides, merged per path. Untracked files have no
  * diff, so their line count is read from the blob length instead — that keeps
@@ -340,14 +356,6 @@ export interface CommitNode {
 
 const LOG_FORMAT = '%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e'
 
-function parseRefs(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part !== '')
-    .map((part) => part.replace(/^HEAD -> /, ''))
-}
-
 /** Commit graph ordered by `--date-order`, newest first, across every ref. */
 export async function graph(cwd: string, limit = 60): Promise<CommitNode[]> {
   let raw: string
@@ -380,7 +388,7 @@ export async function graph(cwd: string, limit = 60): Promise<CommitNode[]> {
       author: author ?? '',
       email: email ?? '',
       time: Number(time) || 0,
-      refs: parseRefs(refs ?? ''),
+      refs: parseDecorations(refs ?? ''),
       subject: subject ?? '',
     })
   }
@@ -518,4 +526,507 @@ export async function suggestMessage(cwd: string): Promise<string> {
   if (names.length === 0) return ''
   if (names.length === 1) return `chore: 更新 ${names[0]}`
   return `chore: 更新 ${names.length} 个文件`
+}
+
+/* ------------------------------------------------------------------ branches */
+
+export interface BranchInfo {
+  /** `main`, `origin/main`, … */
+  name: string
+  /** Ref is remote-tracking (`refs/remotes/…`). */
+  remote: boolean
+  current: boolean
+  upstream: string
+  ahead: number
+  behind: number
+  sha: string
+  subject: string
+}
+
+/**
+ * Local + remote branches in one pass.
+ *
+ * `%(upstream:track)` gives `[ahead 2, behind 1]`, which is the only place git
+ * reports divergence for a ref that is not checked out — the current branch's
+ * numbers come from `rev-list` in `repoInfo` instead.
+ */
+export async function branches(cwd: string): Promise<BranchInfo[]> {
+  const format = [
+    '%(refname)',
+    '%(refname:short)',
+    '%(HEAD)',
+    '%(upstream:short)',
+    '%(upstream:track)',
+    '%(objectname:short)',
+    '%(contents:subject)',
+  ].join('%1f')
+  let raw: string
+  try {
+    raw = await gitOrThrow(cwd, [
+      'for-each-ref',
+      '--sort=-committerdate',
+      `--format=${format}`,
+      'refs/heads',
+      'refs/remotes',
+    ])
+  } catch {
+    return []
+  }
+  const out: BranchInfo[] = []
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue
+    const [full, short, head, upstream, track, sha, subject] = line.split('\x1f')
+    if (full === undefined || short === undefined || short.endsWith('/HEAD')) continue
+    const remote = full.startsWith('refs/remotes/')
+    const aheadMatch = /ahead (\d+)/.exec(track ?? '')
+    const behindMatch = /behind (\d+)/.exec(track ?? '')
+    out.push({
+      name: short,
+      remote,
+      current: (head ?? '').trim() === '*',
+      upstream: upstream ?? '',
+      ahead: aheadMatch === null ? 0 : Number(aheadMatch[1]),
+      behind: behindMatch === null ? 0 : Number(behindMatch[1]),
+      sha: sha ?? '',
+      subject: subject ?? '',
+    })
+  }
+  return out
+}
+
+export interface SyncResult {
+  ok: true
+  /** Human-readable summary of what the network operation reported. */
+  summary: string
+  output: string
+}
+
+/**
+ * `git fetch` / `pull` / `push`.
+ *
+ * Network commands get a much longer timeout than the local plumbing: a cold
+ * clone-sized fetch over a slow link is minutes, not seconds. Progress output is
+ * captured so the popup can show what actually happened.
+ */
+export async function sync(
+  cwd: string,
+  action: 'fetch' | 'pull' | 'push',
+  options: { remote?: string; branch?: string; setUpstream?: boolean; force?: boolean } = {},
+): Promise<SyncResult> {
+  const args: string[] = [action]
+  const remote = (options.remote ?? '').trim()
+  const branch = (options.branch ?? '').trim()
+
+  if (action === 'fetch') args.push('--all', '--prune')
+  if (action === 'push' && options.setUpstream === true) args.push('--set-upstream')
+  if (action === 'push' && options.force === true) args.push('--force-with-lease')
+  if (remote !== '') args.push(remote)
+  if (branch !== '' && action !== 'fetch') args.push(branch)
+
+  try {
+    const result = await run('git', ['-C', cwd, ...args], {
+      cwd,
+      windowsHide: true,
+      timeout: 180_000,
+      maxBuffer: MAX_BUFFER,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: 'echo',
+        GIT_PAGER: 'cat',
+        LC_ALL: 'C.UTF-8',
+        LANG: 'C.UTF-8',
+      },
+    })
+    const output = `${result.stdout}${result.stderr}`.trim()
+    return { ok: true, summary: summarizeSync(action, output), output }
+  } catch (error) {
+    const failure = error as GitFailure
+    const detail = `${failure.stdout ?? ''}${failure.stderr ?? ''}${failure.message ?? ''}`.trim()
+    if (/Authentication failed|terminal prompts disabled|could not read Username|Permission denied/i.test(detail)) {
+      throw new GitError('需要远端凭据，但非交互环境无法输入密码；请先在本机配置 SSH key 或凭据管理器', 401, detail)
+    }
+    throw new Error(detail.split('\n').filter(Boolean).slice(-1)[0] || `${action} 失败`)
+  }
+}
+
+function summarizeSync(action: string, output: string): string {
+  if (output === '') return action === 'fetch' ? '已是最新' : `${action} 完成`
+  const label = action === 'fetch' ? '已拉取' : action === 'pull' ? '已拉取并合并' : '已推送'
+  return `${label}（${output.split('\n').length} 行输出）`
+}
+
+/* ------------------------------------------------------------------- remotes */
+
+export interface RemoteInfo {
+  name: string
+  /** fetch URL */
+  url: string
+  pushUrl: string
+}
+
+export async function remotes(cwd: string): Promise<RemoteInfo[]> {
+  let raw: string
+  try {
+    raw = await gitOrThrow(cwd, ['remote', '-v'])
+  } catch {
+    return []
+  }
+  const byName = new Map<string, RemoteInfo>()
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue
+    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(line.trim())
+    if (match === null) continue
+    const [, name, url, kind] = match
+    const current = byName.get(name) ?? { name, url: '', pushUrl: '' }
+    if (kind === 'fetch') current.url = url
+    else current.pushUrl = url
+    byName.set(name, current)
+  }
+  return [...byName.values()]
+}
+
+export async function addRemote(cwd: string, name: string, url: string): Promise<void> {
+  const clean = name.trim()
+  if (clean === '' || !/^[A-Za-z0-9._-]+$/.test(clean)) throw new GitError('远端名只能是字母、数字、点、下划线、短横线', 400)
+  if (url.trim() === '') throw new GitError('缺少远端 URL', 400)
+  if ((await remotes(cwd)).some((remote) => remote.name === clean)) {
+    throw new GitError(`远端 ${clean} 已存在`, 409)
+  }
+  await gitOrThrow(cwd, ['remote', 'add', clean, url.trim()])
+}
+
+export async function removeRemote(cwd: string, name: string): Promise<void> {
+  await gitOrThrow(cwd, ['remote', 'remove', name])
+}
+
+export async function setRemoteUrl(cwd: string, name: string, url: string): Promise<void> {
+  if (url.trim() === '') throw new GitError('缺少远端 URL', 400)
+  await gitOrThrow(cwd, ['remote', 'set-url', name, url.trim()])
+}
+
+/* ------------------------------------------------------------------- switches */
+
+export async function checkout(cwd: string, target: string, options: { create?: boolean } = {}): Promise<string> {
+  const name = target.trim()
+  if (name === '') throw new GitError('缺少分支名', 400)
+  const args = options.create === true ? ['switch', '-c', name] : ['switch', name]
+  try {
+    await gitOrThrow(cwd, args)
+  } catch (error) {
+    const detail = error instanceof GitError ? error.detail : ''
+    if (/already exists/i.test(detail)) throw new GitError(`分支 ${name} 已存在`, 409, detail)
+    if (/does not match any|pathspec .* did not match|invalid reference/i.test(detail)) {
+      throw new GitError(`分支 ${name} 不存在`, 404, detail)
+    }
+    if (/local changes|would be overwritten/i.test(detail)) {
+      throw new GitError('工作区有未提交的更改，先提交或暂存再切分支', 409, detail)
+    }
+    throw error
+  }
+  return (await gitOrThrow(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+}
+
+export async function createBranch(cwd: string, name: string, startPoint = ''): Promise<void> {
+  const clean = name.trim()
+  if (clean === '') throw new GitError('缺少分支名', 400)
+  const args = ['switch', '-c', clean]
+  if (startPoint.trim() !== '') args.push(startPoint.trim())
+  await gitOrThrow(cwd, args)
+}
+
+export async function deleteBranch(cwd: string, name: string, force = false): Promise<void> {
+  await gitOrThrow(cwd, ['branch', force ? '-D' : '-d', name])
+}
+
+/* -------------------------------------------------------------- commit detail */
+
+export interface CommitDetail {
+  sha: string
+  short: string
+  author: string
+  email: string
+  time: number
+  committer: string
+  parents: string[]
+  refs: string[]
+  subject: string
+  body: string
+  files: Array<{ path: string; from: string; added: number; removed: number; binary: boolean }>
+  patch: string
+  added: number
+  removed: number
+  tooLarge: boolean
+}
+
+const MAX_COMMIT_PATCH = 600_000
+
+/**
+ * One commit's metadata, changed files and patch.
+ *
+ * `--first-parent` is NOT used: the patch is the diff against the first parent
+ * (`sha^`), which is what VS Code shows for a selected commit. A root commit has
+ * no parent, so it is diffed against the empty tree instead.
+ */
+export async function commitDetail(cwd: string, sha: string): Promise<CommitDetail> {
+  const target = (sha ?? '').trim()
+  if (!/^[0-9a-fA-F]{4,40}$/.test(target)) throw new GitError('提交哈希格式不正确', 400)
+
+  const meta = await gitOrThrow(cwd, [
+    'show',
+    '--no-patch',
+    '--pretty=format:%H%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%P%x1f%D%x1f%s%x1f%b',
+    target,
+  ])
+  const [full, author, email, time, committer, parents, refs, subject, body] = meta.split('\x1f')
+
+  const hasParent = (parents ?? '').trim() !== ''
+  const diffTarget = hasParent ? `${target}^` : emptyTree(cwd)
+
+  let numstat = ''
+  try {
+    numstat = await gitOrThrow(cwd, ['diff', '--numstat', '--find-renames', await diffTarget, target])
+  } catch {
+    numstat = ''
+  }
+
+  const files: CommitDetail['files'] = []
+  for (const line of numstat.split('\n')) {
+    if (line.trim() === '') continue
+    const [added, removed, ...rest] = line.split('\t')
+    const path = rest.join('\t')
+    if (path === '') continue
+    let from = ''
+    let shown = path
+    const arrow = path.indexOf('=>')
+    if (arrow !== -1) {
+      from = path.slice(0, arrow).replace(/[{}]/g, '').trim()
+      shown = path.slice(arrow + 2).trim()
+    }
+    files.push({
+      path: shown,
+      from,
+      added: Number(added) || 0,
+      removed: Number(removed) || 0,
+      binary: added === '-' || removed === '-',
+    })
+  }
+
+  let patch = ''
+  try {
+    patch = await gitOrThrow(cwd, [
+      'diff',
+      '--no-color',
+      '--no-ext-diff',
+      '--find-renames',
+      '--unified=3',
+      await diffTarget,
+      target,
+    ])
+  } catch {
+    patch = ''
+  }
+
+  const tooLarge = patch.length > MAX_COMMIT_PATCH
+  let added = 0
+  let removed = 0
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) added += 1
+    else if (line.startsWith('-')) removed += 1
+  }
+
+  return {
+    sha: full ?? target,
+    short: (full ?? target).slice(0, 7),
+    author: author ?? '',
+    email: email ?? '',
+    time: Number(time) || 0,
+    committer: committer ?? '',
+    parents: (parents ?? '').split(' ').filter(Boolean),
+    refs: parseDecorations(refs ?? ''),
+    subject: subject ?? '',
+    body: body ?? '',
+    files,
+    patch: tooLarge ? patch.slice(0, MAX_COMMIT_PATCH) : patch,
+    added,
+    removed,
+    tooLarge,
+  }
+}
+
+/** SHA of the empty tree, so a root commit can be diffed like any other. */
+function emptyTree(cwd: string): Promise<string> {
+  return gitOrThrow(cwd, ['hash-object', '-t', 'tree', '--stdin']).then((out) => out.trim() || '4b825dc642cb6eb9a060e54bf8d69288fbee4904')
+}
+
+/* ------------------------------------------------------------ history rewrite */
+
+export type CommitAction = 'revert' | 'reset-soft' | 'reset-mixed' | 'reset-hard' | 'rebase'
+
+export interface CommitActionResult {
+  ok: true
+  action: CommitAction
+  summary: string
+  /** Restored/parked work is reported so the caller can warn before it happens. */
+  output: string
+}
+
+/**
+ * The history operations the commit context menu offers.
+ *
+ * `reset --hard` and `rebase` are destructive, so the caller is expected to have
+ * asked first; this function does exactly what it is told and reports git's own
+ * words back rather than paraphrasing them.
+ */
+export async function commitAction(
+  cwd: string,
+  sha: string,
+  action: CommitAction,
+): Promise<CommitActionResult> {
+  const target = (sha ?? '').trim()
+  if (!/^[0-9a-fA-F]{4,40}$/.test(target)) throw new GitError('提交哈希格式不正确', 400)
+
+  const labels: Record<CommitAction, string> = {
+    revert: '已生成反向提交',
+    'reset-soft': `已软重置到 ${target.slice(0, 7)}（改动全在暂存区）`,
+    'reset-mixed': `已混合重置到 ${target.slice(0, 7)}（改动保留在工作区）`,
+    'reset-hard': `已硬重置到 ${target.slice(0, 7)}（工作区已回滚）`,
+    rebase: `已 rebase 到 ${target.slice(0, 7)}`,
+  }
+
+  let output = ''
+  try {
+    if (action === 'revert') {
+      output = await gitOrThrow(cwd, ['revert', '--no-edit', target])
+    } else if (action === 'reset-soft') {
+      output = await gitOrThrow(cwd, ['reset', '--soft', target])
+    } else if (action === 'reset-mixed') {
+      output = await gitOrThrow(cwd, ['reset', '--mixed', target])
+    } else if (action === 'reset-hard') {
+      output = await gitOrThrow(cwd, ['reset', '--hard', target])
+    } else {
+      output = await gitOrThrow(cwd, ['rebase', target])
+    }
+  } catch (error) {
+    const detail = error instanceof GitError ? error.detail : ''
+    if (/would be overwritten|local changes/i.test(detail)) {
+      throw new GitError('工作区有未提交的更改，先提交或放弃后再操作', 409, detail)
+    }
+    if (/no tracking information/i.test(detail)) throw new GitError('当前分支没有上游分支', 409, detail)
+    throw error
+  }
+  return { ok: true, action, summary: labels[action], output: output.trim() }
+}
+
+/* --------------------------------------------------------------- terminal */
+
+export interface TerminalResult {
+  /** Command line as typed. */
+  command: string
+  /** Combined stdout+stderr. */
+  output: string
+  /** Process exit code; `null` when the command was killed by the timeout. */
+  code: number | null
+  /** Working directory after the command (so `cd` persists between calls). */
+  cwd: string
+  durationMs: number
+}
+
+const TERMINAL_TIMEOUT_MS = 120_000
+const TERMINAL_MAX_OUTPUT = 400_000
+
+/**
+ * Run one line in a shell rooted at the repo.
+ *
+ * This is a deliberately interactive surface: the user types the command, so it
+ * goes through a shell rather than an argv array — quoting, pipes and `&&` behave
+ * the way they do in any terminal. `cwd` is tracked by echoing it back on a
+ * sentinel line, which keeps `cd` working without keeping a real PTY alive.
+ */
+export async function terminalRun(cwd: string, command: string): Promise<TerminalResult> {
+  const line = command.trim()
+  if (line === '') throw new GitError('命令不能为空', 400)
+  if (line.length > 4000) throw new GitError('命令过长', 400)
+  const started = Date.now()
+
+  const isWindows = process.platform === 'win32'
+  const sentinel = `__WAGQ_CWD_${Math.random().toString(36).slice(2)}__`
+  // The payload after the sentinel is TAB-separated: a Windows path contains
+  // `:` (`C:\...`), so a colon separator would split the drive letter off.
+  const script = isWindows
+    ? `${line}\r
+$dshExit = if ($LASTEXITCODE -eq $null) { 0 } else { $LASTEXITCODE }
+Write-Output "${sentinel}\`t$((Get-Location).Path)\`t$dshExit"`
+    : `${line}\n__dsh_exit=$?; printf '%s\\t%s\\t%s\\n' '${sentinel}' "$PWD" "$__dsh_exit"`
+
+  const shellArgs = isWindows
+    ? ['-NoLogo', '-NonInteractive', '-NoProfile', '-Command', script]
+    : ['-lc', script]
+
+  try {
+    // spawn the shell binary directly with its own flags — no extra quoting layer
+    const result = await run(isWindows ? 'powershell.exe' : '/bin/sh', shellArgs, {
+      cwd,
+      windowsHide: true,
+      timeout: TERMINAL_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_PAGER: 'cat',
+        PAGER: 'cat',
+        GIT_TERMINAL_PROMPT: '0',
+        // Colour codes would render as escapes in the panel's <pre>.
+        NO_COLOR: '1',
+        TERM: 'dumb',
+      },
+    })
+    const combined = `${result.stdout}${result.stderr}`
+    const { output, nextCwd, code } = splitSentinel(combined, sentinel, cwd)
+    return {
+      command: line,
+      output: output.length > TERMINAL_MAX_OUTPUT ? output.slice(-TERMINAL_MAX_OUTPUT) : output,
+      code,
+      cwd: nextCwd,
+      durationMs: Date.now() - started,
+    }
+  } catch (error) {
+    const failure = error as GitFailure & { killed?: boolean }
+    const combined = `${failure.stdout ?? ''}${failure.stderr ?? ''}`
+    const { output, nextCwd, code } = splitSentinel(combined, sentinel, cwd)
+    if (failure.killed === true) {
+      return {
+        command: line,
+        output: `${output}\n[超时] 命令超过 ${TERMINAL_TIMEOUT_MS / 1000} 秒未结束，已中止。`,
+        code: null,
+        cwd: nextCwd,
+        durationMs: Date.now() - started,
+      }
+    }
+    return {
+      command: line,
+      output: `${output}${output === '' ? '' : '\n'}${failure.message ?? ''}`.trim(),
+      code: typeof failure.code === 'number' ? failure.code : 1,
+      cwd: nextCwd,
+      durationMs: Date.now() - started,
+    }
+  }
+}
+
+function splitSentinel(text: string, sentinel: string, fallbackCwd: string): { output: string; nextCwd: string; code: number | null } {
+  const index = text.lastIndexOf(sentinel)
+  if (index === -1) return { output: text.trimEnd(), nextCwd: fallbackCwd, code: 0 }
+  const head = text.slice(0, index)
+  const tail = text.slice(index + sentinel.length)
+  // `<sentinel>\t<cwd>\t<exit>` — TAB-separated so a `C:\…` path stays whole.
+  const parts = tail.split('\n')[0].split('\t')
+  const nextCwd = (parts[1] ?? '').trim()
+  const codeText = (parts[2] ?? '').trim()
+  return {
+    output: head.trimEnd(),
+    nextCwd: nextCwd === '' ? fallbackCwd : nextCwd,
+    code: codeText === '' ? 0 : Number(codeText) || 0,
+  }
 }
