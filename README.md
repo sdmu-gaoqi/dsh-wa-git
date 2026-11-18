@@ -88,23 +88,3 @@ dsh plugin --profile desktop add "./dsh-wa-git"
 
 元素带 `data-dsh-plugin="wagq-dsh-git"` / `data-dsh-part="scm-button|scm-popup"` /
 `data-dsh-surface="overlay"`，符合 dsh-web 的皮肤契约。
-
-## 已知边界
-
-- **不改 git 的全局配置**：`-c core.quotepath=false` 按调用传，不写你的 `~/.gitconfig`。
-- **不碰网络**：没有 fetch/push/pull。远端相关只读 `@{upstream}` 算 ahead/behind。
-- **diff 上限 60 万字符**：超了截断并在界面上说明；二进制文件直接标「无法以文本显示」。
-- **自动刷新 15 秒**：弹窗开着时静默拉一次 state，避免和工作区里的改动脱节。
-- **提交图不压缩泳道**：分支线在整个窗口内保持列不动（和 VS Code 一样），代价是
-  分支特别多时图会变宽。
-
-## 坑（都踩过）
-
-1. `presentCall` / `presentResult` 那套是**工具卡片**的扩展点，做不出「点按钮弹窗」。
-   要自定义 UI 必须走 `dsh.client` + `slots`。
-2. `package.json` 的 `dsh.client.platform` 必须是 `"web"`，`exports` 必须有 `"./client"`，
-   否则 client-modules 直接抛「declares dsh.client but exports no ./client bundle」。
-3. 浏览器模块 id 用**包名**（`@wagq/dsh-git`），不是 `name` 导出的那个字符串。
-4. session 作用域的 slot 通过 `inject(sessionId)` 给 props，不是直接往组件里塞。
-5. `git status --porcelain=v1 -z` 里重命名的原路径是**下一条记录**，不是同一行的一部分。
-6. Windows 上 `git diff --no-index` 的空文件参数要写 `NUL`，写 `/dev/null` 会当成普通文件名。
