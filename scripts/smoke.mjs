@@ -411,7 +411,7 @@ async function testHost() {
           yield { type: 'text-delta', text: '```\n' }
           yield { type: 'text-delta', text: 'feat: 加上 gen.txt\n' }
           yield { type: 'text-delta', text: '```' }
-          yield { type: 'finish', finishReason: 'stop' }
+          yield { type: 'finish', reason: { kind: 'stop' } }
         },
       }
     }
@@ -432,17 +432,52 @@ async function testHost() {
   assert.equal(calls.length, 1)
   assert.equal(calls[0].provider, 'fake-provider', 'routes to the session model')
   assert.equal(calls[0].model, 'fake-model')
+  assert.equal(typeof calls[0].system, 'string', 'system goes in its own option')
+  assert.ok(calls[0].system.includes('commit message'), 'system says what to produce')
   const sent = JSON.stringify(calls[0].messages)
   assert.ok(sent.includes('gen.txt'), 'prompt carries the changed file')
   assert.ok(sent.includes('+hello'), 'prompt carries the diff hunk')
+  assert.ok(!sent.includes('You write git commit messages'), 'system is NOT inside messages')
   ok('生成请求带上文件清单与差异并走会话模型')
+
+  // `prepareCall` is the path the real host exposes; the prepared config must be
+  // what actually reaches stream().
+  const preparedCalls = []
+  ctx.get = ((original) => (name) => {
+    if (name !== 'llm') return original(name)
+    return {
+      prepareCall: async (config) => {
+        assert.equal(config.provider, 'fake-provider')
+        assert.equal(config.model, 'fake-model')
+        return {
+          config: { provider: 'fake-provider', model: 'fake-model', temperature: 0.2 },
+          stream: async function* (options) {
+            preparedCalls.push(options)
+            yield { type: 'text-delta', text: 'refactor(core): 用 prepareCall 走一遍' }
+            yield { type: 'finish', reason: { kind: 'stop' } }
+          },
+        }
+      },
+    }
+  })(ctx.get)
+
+  const genPrepared = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/generate-message',
+    body: { cwd: dir, sessionId: 'session-1' },
+  })
+  assert.equal(genPrepared.status, 200, genPrepared.text)
+  assert.equal(genPrepared.json.message, 'refactor(core): 用 prepareCall 走一遍')
+  assert.equal(preparedCalls.length, 1)
+  assert.equal(preparedCalls[0].temperature, 0.2, 'prepared config is forwarded')
+  ok('prepareCall 的 config 会透传给 stream')
 
   // A model that returns nothing must not produce an empty commit message.
   ctx.get = ((original) => (name) => {
     if (name === 'llm') {
       return {
         stream: async function* () {
-          yield { type: 'finish', finishReason: 'stop' }
+          yield { type: 'finish', reason: { kind: 'stop' } }
         },
       }
     }
@@ -455,7 +490,29 @@ async function testHost() {
     body: { cwd: dir, sessionId: 'session-1' },
   })
   assert.equal(genEmpty.status, 502, genEmpty.text)
+  assert.match(genEmpty.json.error, /没有返回文本/)
   ok('模型返回空内容 → 502 而不是空提交消息')
+
+  // A provider failure inside the stream must surface its own message.
+  ctx.get = ((original) => (name) => {
+    if (name === 'llm') {
+      return {
+        stream: async function* () {
+          yield { type: 'finish', reason: { kind: 'error', failure: { message: 'rate limited' } } }
+        },
+      }
+    }
+    return original(name)
+  })(ctx.get)
+
+  const genFail = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/generate-message',
+    body: { cwd: dir, sessionId: 'session-1' },
+  })
+  assert.equal(genFail.status, 502, genFail.text)
+  assert.match(genFail.json.error, /rate limited/)
+  ok('流内失败会带上提供方原始错误')
 
   git('reset', '-q', '--hard', 'HEAD')
 

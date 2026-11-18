@@ -67,7 +67,8 @@ conversation.session.header.utilities
 | GET | `/api/sessions` | 会话 → 工作目录 |
 | GET | `/api/state?cwd=&limit=` | 仓库信息 + `status --porcelain=v1 -z` + `log --all --date-order` |
 | GET | `/api/diff?cwd=&path=&staged=&from=` | 工作区 unified patch |
-| GET | `/api/message?cwd=` | 建议提交信息 |
+| GET | `/api/message?cwd=` | 基于暂存文件名的简易提交信息 |
+| POST | `/api/generate-message` | **用当前会话的模型**根据暂存差异生成提交消息 |
 | GET | `/api/compare?cwd=&limit=` | `HEAD...@{upstream}` 的双向提交列表（落后 / 领先） |
 | GET | `/api/branches?cwd=` | 本地/远程分支 + `%(upstream:track)` 解析出的 ahead/behind |
 | GET | `/api/remotes?cwd=` | 远端列表（fetch/push URL） |
@@ -98,7 +99,7 @@ conversation.session.header.utilities
 pnpm install
 pnpm run build      # tsc → dist/index.js；esbuild → dist/client.js（带 __ModuleLoader__ 外壳）
 pnpm run typecheck  # node 半侧 + 浏览器半侧分别过一遍类型
-pnpm run smoke      # 临时仓库跑全部路由 + react-dom/server 渲染按钮（42 项）
+pnpm run smoke      # 临时仓库跑全部路由 + react-dom/server 渲染按钮（48 项）
 pnpm run preview    # 无头 Chromium 截图，可加 --scene=changes|diff|graph|menu|context|branches|terminal|compare
                     #   加 --alpha 模拟半透明皮肤，加 --measure 打印各栏实际尺寸
 node scripts/probe.mjs <url>   # 对运行中的实例读取真实令牌与弹窗计算样式
