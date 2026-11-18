@@ -140,6 +140,30 @@ export interface TerminalResult {
   durationMs: number
 }
 
+export interface CompareSide {
+  sha: string
+  short: string
+  author: string
+  time: number
+  subject: string
+}
+
+export interface CompareResult {
+  ok: true
+  upstream: string
+  /** Commits HEAD has that the upstream does not. */
+  ahead: CompareSide[]
+  /** Commits the upstream has that HEAD does not. */
+  behind: CompareSide[]
+}
+
+export interface GeneratedMessage {
+  ok: true
+  message: string
+  provider: string
+  model: string
+}
+
 export class ApiError extends Error {
   status: number
   detail: string
@@ -210,6 +234,12 @@ export const api = {
   },
   commitDetail(cwd: string, sha: string): Promise<{ ok: true; commit: CommitDetail }> {
     return get('commit', { cwd, sha })
+  },
+  compare(cwd: string, limit = 40): Promise<CompareResult> {
+    return get('compare', { cwd, limit: String(limit) })
+  },
+  generateMessage(cwd: string, sessionId: string): Promise<GeneratedMessage> {
+    return post('generate-message', { cwd, sessionId })
   },
   stage(cwd: string, paths: string[]): Promise<{ ok: true }> {
     return post('stage', { cwd, paths })

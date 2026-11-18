@@ -17,6 +17,8 @@ import type {
   CommitAction,
   CommitDetail,
   CommitNode,
+  CompareResult,
+  CompareSide,
   DiffPayload,
   RemoteInfo,
   RepoState,
@@ -26,7 +28,7 @@ import { ICONS } from './icons'
 import { CSS } from './styles'
 import { layoutGraph, laneColor } from './graph'
 import type { GraphRow } from './graph'
-import { DiffBody } from './parts/DiffBody'
+import { DiffBody, DiffBodySplit } from './parts/DiffBody'
 import { Menu } from './parts/Menu'
 import type { MenuItem } from './parts/Menu'
 import { Terminal } from './parts/Terminal'
@@ -268,9 +270,11 @@ function useRepoState(cwd: string, open: boolean): RepoHook {
 function CommitDetailView(props: {
   cwd: string
   sha: string
+  split: boolean
+  onToggleSplit: () => void
   onClose: () => void
 }): React.ReactElement {
-  const { cwd, sha, onClose } = props
+  const { cwd, sha, split, onClose } = props
   const [detail, setDetail] = React.useState<CommitDetail | null>(null)
   const [error, setError] = React.useState('')
   const [loading, setLoading] = React.useState(true)
@@ -356,13 +360,24 @@ function CommitDetailView(props: {
       React.createElement('span', { className: 'dshg-spacer' }),
       React.createElement(
         'button',
+        {
+          type: 'button',
+          className: 'dshg-mini',
+          title: split ? '切换为行内视图' : '切换为并排视图',
+          'aria-pressed': split,
+          onClick: () => props.onToggleSplit(),
+        },
+        React.createElement('span', { className: 'dshg-viewtoggle' }, split ? '并排' : '行内'),
+      ),
+      React.createElement(
+        'button',
         { type: 'button', className: 'dshg-mini', title: '关闭（Esc）', onClick: onClose },
         React.createElement(Icon, { name: 'close' }),
       ),
     ),
     React.createElement(
       'div',
-      { className: 'dshg-diffbody' },
+      { className: `dshg-diffbody${split ? ' dshg-diffbody-split' : ''}` },
       loading ? React.createElement('div', { className: 'dshg-diffempty' }, '正在读取提交…') : null,
       !loading && error !== '' ? React.createElement('div', { className: 'dshg-diffempty' }, error) : null,
       !loading && detail !== null
@@ -370,7 +385,7 @@ function CommitDetailView(props: {
             React.Fragment,
             null,
             meta(),
-            React.createElement(DiffBody, { patch: detail.patch, empty: '这个提交没有文本差异' }),
+            React.createElement(split ? DiffBodySplit : DiffBody, { patch: detail.patch, empty: '这个提交没有文本差异' }),
             detail.tooLarge ? React.createElement('div', { className: 'dshg-diffempty' }, '差异过大，仅显示前 60 万字符') : null,
           )
         : null,
@@ -527,16 +542,148 @@ function BranchPicker(props: {
   )
 }
 
+/* --------------------------------------------------------- upstream compare */
+
+/**
+ * 「和远程对比」: the two commit lists `HEAD...upstream` produces.
+ *
+ * VS Code shows the same thing as two groups in the SCM view (↓ incoming,
+ * ↑ outgoing). Here it is a side panel so it can be read next to the list, and
+ * each row is clickable to inspect that commit.
+ */
+function CompareView(props: {
+  cwd: string
+  onClose: () => void
+  onPick: (sha: string) => void
+}): React.ReactElement {
+  const { cwd, onClose, onPick } = props
+  const [data, setData] = React.useState<CompareResult | null>(null)
+  const [error, setError] = React.useState('')
+  const [loading, setLoading] = React.useState(true)
+
+  const load = React.useCallback(() => {
+    setLoading(true)
+    setError('')
+    api
+      .compare(cwd, 60)
+      .then((result) => setData(result))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoading(false))
+  }, [cwd])
+
+  React.useEffect(load, [load])
+
+  const group = (
+    title: string,
+    hint: string,
+    list: CompareSide[],
+    tone: 'in' | 'out',
+  ): React.ReactNode =>
+    React.createElement(
+      'div',
+      { className: 'dshg-cmp-group' },
+      React.createElement(
+        'div',
+        { className: 'dshg-sechead dshg-static' },
+        React.createElement('span', { className: `dshg-cmp-arrow dshg-cmp-${tone}` }, tone === 'in' ? '↓' : '↑'),
+        React.createElement('span', { className: 'dshg-sectitle' }, title),
+        React.createElement('span', { className: 'dshg-count' }, list.length),
+        React.createElement('span', { className: 'dshg-secactions' },
+          React.createElement('span', { className: 'dshg-gsha' }, hint),
+        ),
+      ),
+      list.length === 0
+        ? React.createElement('div', { className: 'dshg-cmp-empty' }, '没有提交')
+        : React.createElement(
+            'div',
+            null,
+            ...list.map((side) =>
+              React.createElement(
+                'div',
+                {
+                  key: side.sha,
+                  className: 'dshg-cmp-row',
+                  role: 'button',
+                  tabIndex: 0,
+                  title: `${side.sha}\n${side.author}\n${side.subject}`,
+                  onClick: () => onPick(side.sha),
+                  onKeyDown: (event: React.KeyboardEvent) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onPick(side.sha)
+                    }
+                  },
+                },
+                React.createElement('span', { className: 'dshg-cmp-subject' }, side.subject === '' ? '(no message)' : side.subject),
+                React.createElement('span', { className: 'dshg-gside' },
+                  React.createElement('span', { className: 'dshg-gsha' }, side.short),
+                  React.createElement('span', null, relativeTime(side.time)),
+                ),
+              ),
+            ),
+          ),
+    )
+
+  return React.createElement(
+    'div',
+    { className: 'dshg-diff dshg-compare' },
+    React.createElement(
+      'div',
+      { className: 'dshg-diffhead' },
+      React.createElement(Icon, { name: 'sync' }),
+      React.createElement(
+        'span',
+        { className: 'dshg-diffpath' },
+        data === null || data.upstream === '' ? '与远程对比' : `与 ${data.upstream} 对比`,
+      ),
+      React.createElement('span', { className: 'dshg-spacer' }),
+      React.createElement(
+        'button',
+        { type: 'button', className: 'dshg-mini', title: '刷新对比', onClick: load },
+        React.createElement(Icon, { name: 'refresh' }),
+      ),
+      React.createElement(
+        'button',
+        { type: 'button', className: 'dshg-mini', title: '关闭（Esc）', onClick: onClose },
+        React.createElement(Icon, { name: 'close' }),
+      ),
+    ),
+    React.createElement(
+      'div',
+      { className: 'dshg-diffbody dshg-cmp-body' },
+      loading ? React.createElement('div', { className: 'dshg-diffempty' }, '正在对比远程…') : null,
+      !loading && error !== '' ? React.createElement('div', { className: 'dshg-diffempty' }, error) : null,
+      !loading && error === '' && data !== null && data.upstream === ''
+        ? React.createElement(
+            'div',
+            { className: 'dshg-diffempty' },
+            '当前分支没有上游分支，无法对比。先推送一次（会建立上游）再回来看。',
+          )
+        : null,
+      !loading && data !== null && data.upstream !== ''
+        ? React.createElement(
+            React.Fragment,
+            null,
+            group('落后（远端有、本地没有）', data.upstream, data.behind, 'in'),
+            group('领先（本地有、远端没有）', 'HEAD', data.ahead, 'out'),
+          )
+        : null,
+    ),
+  )
+}
+
 /* ------------------------------------------------------------------- popup */
 
 interface PopupProps {
   cwd: string
+  /** Session whose model writes commit messages; empty falls back to the default. */
+  sessionId: string
   anchor: DOMRect | null
   onClose: () => void
 }
 
 function Popup(props: PopupProps): React.ReactElement {
-  const { cwd, anchor, onClose } = props
+  const { cwd, sessionId, anchor, onClose } = props
   const repo = useRepoState(cwd, true)
   const state = repo.state
 
@@ -553,6 +700,10 @@ function Popup(props: PopupProps): React.ReactElement {
   const [commitSha, setCommitSha] = React.useState('')
   const [detail, setDetail] = React.useState<CommitDetail | null>(null)
   const [confirm, setConfirm] = React.useState<{ title: string; body: string; run: () => void } | null>(null)
+  /** `true` while the 「与远程对比」 side panel is open. */
+  const [compareOpen, setCompareOpen] = React.useState(false)
+  /** Side-by-side (VS Code style) vs inline diff. Remembered for this popup. */
+  const [diffSplit, setDiffSplit] = React.useState(true)
   const messageRef = React.useRef<HTMLTextAreaElement | null>(null)
 
   const stagedCount = state?.staged.length ?? 0
@@ -575,6 +726,7 @@ function Popup(props: PopupProps): React.ReactElement {
     setNotice('')
     setFailure('')
     setCommitSha('')
+    setCompareOpen(false)
     setTab('changes')
   }, [cwd])
 
@@ -618,6 +770,15 @@ function Popup(props: PopupProps): React.ReactElement {
       setMessage('')
       setAmend(false)
       notify(`已提交 ${result.short}${result.branch === '' ? '' : ` · ${result.branch}`}`)
+    })
+  }
+
+  const doGenerate = (): void => {
+    run('generate', async () => {
+      const result = await api.generateMessage(cwd, sessionId)
+      setMessage(result.message)
+      messageRef.current?.focus()
+      notify(`由 ${result.model} 生成`)
     })
   }
 
@@ -1046,7 +1207,9 @@ function Popup(props: PopupProps): React.ReactElement {
 
   /* ---- layout ---- */
   const position = (): React.CSSProperties => {
-    const width = 480
+    // A side panel needs room for two columns; widen instead of squeezing both.
+    const needsSide = compareOpen || (tab === 'graph' && commitSha !== '') || (tab === 'changes' && selected !== null)
+    const width = Math.min(needsSide ? 860 : 480, Math.max(320, window.innerWidth - 24))
     if (anchor === null || typeof window === 'undefined') return { top: 64, right: 16, width }
     const right = Math.max(12, Math.min(window.innerWidth - width - 12, window.innerWidth - anchor.right))
     const top = Math.max(12, Math.min(anchor.bottom + 8, window.innerHeight - 320))
@@ -1093,25 +1256,22 @@ function Popup(props: PopupProps): React.ReactElement {
     if (tab === 'changes') {
       if (state === null) return null
       const clean = state.staged.length + state.changes.length + state.untracked.length === 0
-      return React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          'div',
-          { className: 'dshg-list' },
-          clean
-            ? React.createElement(
+      const list = React.createElement(
+        'div',
+        { className: 'dshg-list' },
+        clean
+          ? React.createElement(
+              'div',
+              { className: 'dshg-empty' },
+              React.createElement(Icon, { name: 'check' }),
+              React.createElement('div', { className: 'dshg-empty-title' }, '没有更改'),
+              React.createElement(
                 'div',
-                { className: 'dshg-empty' },
-                React.createElement(Icon, { name: 'check' }),
-                React.createElement('div', { className: 'dshg-empty-title' }, '没有更改'),
-                React.createElement(
-                  'div',
-                  { className: 'dshg-empty-body' },
-                  state.repo.empty ? '这个仓库还没有提交。' : '工作区是干净的。',
-                ),
-              )
-            : null,
+                { className: 'dshg-empty-body' },
+                state.repo.empty ? '这个仓库还没有提交。' : '工作区是干净的。',
+              ),
+            )
+          : null,
           section(
             'staged',
             '暂存的更改',
@@ -1189,7 +1349,9 @@ function Popup(props: PopupProps): React.ReactElement {
                 )
               : null,
           ),
-        ),
+      )
+
+      const diffPanel =
         selected === null
           ? null
           : React.createElement(
@@ -1211,26 +1373,44 @@ function Popup(props: PopupProps): React.ReactElement {
                 React.createElement('span', { className: 'dshg-spacer' }),
                 React.createElement(
                   'button',
-                  { type: 'button', className: 'dshg-mini', title: '关闭差异', onClick: () => setSelected(null) },
+                  {
+                    type: 'button',
+                    className: 'dshg-mini',
+                    title: diffSplit ? '切换为行内视图' : '切换为并排视图',
+                    'aria-pressed': diffSplit,
+                    onClick: () => setDiffSplit((prev) => !prev),
+                  },
+                  React.createElement('span', { className: 'dshg-viewtoggle' }, diffSplit ? '并排' : '行内'),
+                ),
+                React.createElement(
+                  'button',
+                  { type: 'button', className: 'dshg-mini', title: '关闭差异（Esc）', onClick: () => setSelected(null) },
                   React.createElement(Icon, { name: 'close' }),
                 ),
               ),
               React.createElement(
                 'div',
-                { className: 'dshg-diffbody' },
+                { className: `dshg-diffbody${diffSplit ? ' dshg-diffbody-split' : ''}` },
                 diffLoading ? React.createElement('div', { className: 'dshg-diffempty' }, '正在读取差异…') : null,
                 !diffLoading && diffError !== '' ? React.createElement('div', { className: 'dshg-diffempty' }, diffError) : null,
                 !diffLoading && diffPayload !== null && diffPayload.binary
                   ? React.createElement('div', { className: 'dshg-diffempty' }, '二进制文件，无法以文本显示差异')
                   : null,
                 !diffLoading && diffPayload !== null && !diffPayload.binary
-                  ? React.createElement(DiffBody, { patch: diffPayload.patch })
+                  ? React.createElement(diffSplit ? DiffBodySplit : DiffBody, { patch: diffPayload.patch })
                   : null,
                 diffPayload?.tooLarge === true
                   ? React.createElement('div', { className: 'dshg-diffempty' }, '差异过大，仅显示前 60 万字符')
                   : null,
               ),
-            ),
+            )
+
+      // Side-by-side: the list keeps its height, the diff takes the other column.
+      return React.createElement(
+        React.Fragment,
+        null,
+        list,
+        diffPanel,
       )
     }
 
@@ -1296,7 +1476,13 @@ function Popup(props: PopupProps): React.ReactElement {
   const commitPanel =
     commitSha !== '' && tab === 'graph'
       ? detail !== null
-        ? React.createElement(CommitDetailView, { cwd, sha: commitSha, onClose: () => setCommitSha('') })
+        ? React.createElement(CommitDetailView, {
+            cwd,
+            sha: commitSha,
+            split: diffSplit,
+            onToggleSplit: () => setDiffSplit((prev) => !prev),
+            onClose: () => setCommitSha(''),
+          })
         : React.createElement(
             'div',
             { className: 'dshg-diff' },
@@ -1316,6 +1502,21 @@ function Popup(props: PopupProps): React.ReactElement {
           )
       : null
 
+  // The right-hand column: whichever of commit detail / upstream compare is open.
+  const sideOpen = compareOpen || (tab === 'graph' && commitSha !== '')
+  const sidePanel =
+    compareOpen
+      ? React.createElement(CompareView, {
+          cwd,
+          onClose: () => setCompareOpen(false),
+          onPick: (sha) => {
+            setCompareOpen(false)
+            setTab('graph')
+            setCommitSha(sha)
+          },
+        })
+      : commitPanel
+
   return React.createElement(
     React.Fragment,
     null,
@@ -1332,6 +1533,8 @@ function Popup(props: PopupProps): React.ReactElement {
         'data-dsh-plugin': 'wagq-dsh-git',
         'data-dsh-part': 'scm-popup',
         'data-dsh-surface': 'overlay',
+        // `data-side` pins the shell height once a column is split in two.
+        'data-side': sideOpen || (tab === 'changes' && selected !== null),
         style: { position: 'fixed', zIndex: 2147482001, ...position() },
         onClick: (event: React.MouseEvent) => event.stopPropagation(),
       },
@@ -1360,12 +1563,28 @@ function Popup(props: PopupProps): React.ReactElement {
           : React.createElement('span', { className: 'dshg-repo' }, cwd === '' ? '未绑定工作目录' : cwd),
         state !== null && (ahead > 0 || behind > 0)
           ? React.createElement(
-              'span',
-              { className: 'dshg-ahead', title: `领先 ${ahead} / 落后 ${behind}${state.repo.upstream === '' ? '（无上游）' : ` · ${state.repo.upstream}`}` },
+              'button',
+              {
+                type: 'button',
+                className: `dshg-ahead${compareOpen ? ' dshg-ahead-on' : ''}`,
+                title: `与 ${state.repo.upstream === '' ? '远程' : state.repo.upstream} 对比（领先 ${ahead} / 落后 ${behind}）\n点击查看两边的提交`,
+                onClick: () => setCompareOpen((prev) => !prev),
+              },
               ahead > 0 ? React.createElement('span', { className: 'dshg-ahead-up' }, `↑${ahead}`) : null,
               behind > 0 ? React.createElement('span', { className: 'dshg-ahead-down' }, `↓${behind}`) : null,
             )
-          : null,
+          : state !== null
+            ? React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: `dshg-ahead${compareOpen ? ' dshg-ahead-on' : ''}`,
+                  title: state.repo.upstream === '' ? '没有上游分支' : `与 ${state.repo.upstream} 对比：已同步`,
+                  onClick: () => setCompareOpen((prev) => !prev),
+                },
+                React.createElement('span', { className: 'dshg-ahead-even' }, '⇅'),
+              )
+            : null,
         React.createElement('span', { className: 'dshg-spacer' }),
         React.createElement(
           'button',
@@ -1445,7 +1664,7 @@ function Popup(props: PopupProps): React.ReactElement {
                 'button',
                 {
                   type: 'button',
-                  className: 'dshg-split',
+                  className: 'dshg-split-arrow',
                   title: amend ? '这次提交将覆盖上一次提交' : '更多提交选项',
                   disabled: busy !== '',
                   onClick: () => setAmend((prev) => !prev),
@@ -1466,6 +1685,19 @@ function Popup(props: PopupProps): React.ReactElement {
                 }),
                 '修改上次提交',
               ),
+              // Generated by the SAME model the conversation is running on.
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-genbtn',
+                  disabled: busy !== '' || (stagedCount === 0 && (state?.changes.length ?? 0) + (state?.untracked.length ?? 0) === 0),
+                  title: '用当前会话的模型，根据差异自动生成提交消息',
+                  onClick: doGenerate,
+                },
+                React.createElement(Icon, { name: 'spark' }),
+                busy === 'generate' ? '生成中…' : '生成提交消息',
+              ),
               React.createElement('span', { className: 'dshg-spacer' }),
               notice !== ''
                 ? React.createElement('span', { className: 'dshg-rowstat dshg-add' }, notice)
@@ -1477,12 +1709,9 @@ function Popup(props: PopupProps): React.ReactElement {
         : null,
 
       /* ---- body ---- */
-      React.createElement(
-        'div',
-        { className: 'dshg-body' },
-        React.createElement('div', { className: 'dshg-pane' }, bodyForTab()),
-        commitPanel,
-      ),
+      // `dshg-pane` is the left column and `sidePanel` the right one; `bodyForTab`
+      // returns only the content, never its own column wrapper.
+      React.createElement('div', { className: 'dshg-body' }, bodyForTab(), sidePanel),
 
       /* ---- footer ---- */
       React.createElement(
@@ -1618,7 +1847,7 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
             { className: 'dshg-err', style: { position: 'fixed', top: 64, right: 16, maxWidth: 360, margin: 0, zIndex: 2147482001 } },
             resolveError,
           )
-        : React.createElement(Popup, { cwd, anchor, onClose: () => setOpen(false) })
+        : React.createElement(Popup, { cwd, sessionId: props.sessionId ?? '', anchor, onClose: () => setOpen(false) })
       : null,
   )
 }

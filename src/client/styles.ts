@@ -1,22 +1,74 @@
 /**
  * CSS for the SCM popup.
  *
- * Colours come from the host alias tokens only (`--dsw-alias-*`), so the panel
+ * Colours come from the host alias tokens only (--dsw-alias-*), so the panel
  * follows every theme/skin the way the official conversation surface does.
- * Everything is prefixed `dshg-` to stay collision-free with other plugins.
+ * Everything is prefixed dshg- to stay collision-free with other plugins.
+ *
+ * IMPORTANT — every floating surface paints on an OPAQUE base. Skins (the
+ * "abyss" dream skin among them) declare --dsw-alias-bg-layer-* WITH ALPHA so
+ * artwork shows through panels; a dialog that inherits that lets the page text
+ * underneath read straight through it. So popup surfaces composite the layer
+ * over the page base themselves (see surfaceRule below) instead of trusting a
+ * single token to be opaque.
+ *
+ * NOTE: this file is a template literal. Never put a backtick inside CSS, not
+ * even in a comment — it ends the string.
  */
 
+/**
+ * How a floating surface gets painted, and why it is two declarations:
+ *
+ *   background-color: var(--dsw-alias-bg-base);            <- opaque floor
+ *   background-image: linear-gradient(LAYER, LAYER);        <- themed tint on top
+ *
+ * `color-mix(x 100%, transparent)` does NOT raise alpha — at 100% weight the
+ * result is just `x`, alpha included. Skins hand out layers with alpha, so the
+ * only reliable opaque result is compositing the layer over the page base, which
+ * is exactly what these two declarations do. If the skin also makes the base
+ * translucent, the gradient is repeated so alpha composites down geometrically.
+ */
+const SURFACE_LAYER = 'var(--dsw-alias-bg-layer-1)'
+const MENU_LAYER = 'var(--dsw-alias-bg-layer-2)'
+
+function surfaceRule(layer: string): string {
+  const tint = `linear-gradient(${layer},${layer})`
+  return `background-color:var(--dsw-alias-bg-base);background-image:${tint},${tint},${tint}`
+}
+
+export const SURFACE_CSS = surfaceRule(SURFACE_LAYER)
+export const MENU_CSS = surfaceRule(MENU_LAYER)
+
 export const CSS = `
+/**
+ * Every floating surface carries the same opaque recipe (see surfaceRule above):
+ * menus and the confirm box render as SIBLINGS of .dshg-root (they must escape
+ * its overflow:hidden), so each one paints its own background rather than
+ * inheriting a variable from the dialog.
+ */
+
+
 .dshg-trigger{flex:none;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;line-height:1}
 .dshg-trigger svg{width:15px;height:15px}
 .dshg-trigger:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshg-trigger-on{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}
 .dshg-trigger:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
 
-.dshg-root{font:inherit;color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 18px 48px -12px rgba(0,0,0,.42),0 4px 14px -6px rgba(0,0,0,.28);overflow:hidden;height:auto;max-height:min(78vh,700px);min-height:0}
+/**
+ * The shell is a column: header / banner / tabs / commit box / body / footer.
+ * isolation:isolate keeps the page behind from compositing through, and the
+ * background is the flattened surface token rather than a raw alias layer.
+ */
+.dshg-root{font:inherit;color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;${SURFACE_CSS};isolation:isolate;border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 18px 48px -12px rgba(0,0,0,.42),0 4px 14px -6px rgba(0,0,0,.28);overflow:hidden;height:auto;max-height:min(78vh,700px);min-height:0}
+/**
+ * With a side panel open the shell needs a FIXED height: the two columns only
+ * split correctly against a resolved height, and the list must scroll instead of
+ * stretching the dialog. Empty/short states still auto-size without the panel.
+ */
+.dshg-root[data-side=true]{height:min(74vh,660px)}
 
 /* ---- header ---- */
-.dshg-head{flex:none;display:flex;align-items:center;gap:8px;padding:9px 8px 8px 12px;border-bottom:.5px solid var(--dsw-alias-border-l3)}
+.dshg-head{flex:none;display:flex;align-items:center;gap:8px;padding:9px 8px 8px 12px;${SURFACE_CSS};border-bottom:.5px solid var(--dsw-alias-border-l3)}
 .dshg-title{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;line-height:18px;white-space:nowrap;flex:none}
 .dshg-title svg{width:14px;height:14px;color:var(--dsw-alias-label-secondary)}
 .dshg-repo{min-width:0;font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
@@ -25,9 +77,12 @@ export const CSS = `
 .dshg-branch-btn{cursor:pointer;font:inherit;font-size:11px;padding:0 8px;height:22px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border-color:var(--dsw-alias-border-l2)}
 .dshg-branch-btn:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-state-business-primary)}
 .dshg-branch-tag{margin-left:2px;padding:0 4px;border-radius:3px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 24%,transparent);color:var(--dsw-alias-state-warn-primary);font-size:9px}
-.dshg-ahead{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
+.dshg-ahead{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;flex:none;height:22px;padding:0 7px;border:.5px solid transparent;border-radius:99px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;font-variant-numeric:tabular-nums;cursor:pointer;line-height:1}
+.dshg-ahead:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l3)}
+.dshg-ahead-on{background:var(--dsw-alias-interactive-bg-active);border-color:var(--dsw-alias-state-business-primary)}
 .dshg-ahead-up{color:var(--dsw-alias-state-success-primary)}
 .dshg-ahead-down{color:var(--dsw-alias-state-warn-primary)}
+.dshg-ahead-even{color:var(--dsw-alias-label-quaternary);letter-spacing:.06em}
 .dshg-spacer{flex:1;min-width:4px}
 .dshg-iconbtn{flex:none;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;line-height:1}
 .dshg-iconbtn svg{width:15px;height:15px}
@@ -38,32 +93,40 @@ export const CSS = `
 @keyframes dshg-spin{to{transform:rotate(360deg)}}
 
 /* ---- commit box ---- */
-.dshg-commit{flex:none;padding:10px 12px 9px;display:flex;flex-direction:column;gap:8px;border-bottom:.5px solid var(--dsw-alias-border-l3)}
+.dshg-commit{flex:none;padding:10px 12px 9px;display:flex;flex-direction:column;gap:8px;${SURFACE_CSS};border-bottom:.5px solid var(--dsw-alias-border-l3)}
 .dshg-msg{box-sizing:border-box;width:100%;height:54px;min-height:42px;max-height:132px;resize:vertical;font:inherit;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);border:.5px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 9px;outline:none}
 .dshg-msg::placeholder{color:var(--dsw-alias-label-quaternary)}
 .dshg-msg:focus{border-color:var(--dsw-alias-state-business-primary)}
-.dshg-actions{display:flex;align-items:center;gap:8px}
 .dshg-commitrow{display:flex;align-items:stretch;border-radius:7px;overflow:hidden;background:var(--dsw-alias-state-business-primary)}
 .dshg-primary{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border:0;border-radius:0;font:inherit;font-size:12.5px;font-weight:500;color:var(--dsw-alias-label-primary-inverted);background:transparent;cursor:pointer;white-space:nowrap;flex:1;min-width:0}
 .dshg-primary:hover{background:rgba(255,255,255,.1)}
 .dshg-primary[disabled]{opacity:.5;cursor:default;background:transparent}
 .dshg-primary svg{width:13px;height:13px}
-.dshg-split{flex:none;width:28px;border:0;border-left:.5px solid rgba(0,0,0,.28);display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--dsw-alias-label-primary-inverted);cursor:pointer;padding:0;line-height:1}
-.dshg-split svg{width:13px;height:13px}
-.dshg-split:hover{background:rgba(255,255,255,.12)}
-.dshg-split[disabled]{opacity:.5;cursor:default;background:transparent}
+.dshg-split-arrow{flex:none;width:28px;border:0;border-left:.5px solid rgba(0,0,0,.28);display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--dsw-alias-label-primary-inverted);cursor:pointer;padding:0;line-height:1}
+.dshg-split-arrow svg{width:13px;height:13px}
+.dshg-split-arrow:hover{background:rgba(255,255,255,.12)}
+.dshg-split-arrow[disabled]{opacity:.5;cursor:default;background:transparent}
 .dshg-subrow{display:flex;align-items:center;gap:8px;min-height:14px}
 .dshg-check{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--dsw-alias-label-tertiary);cursor:pointer;user-select:none}
 .dshg-check input{accent-color:var(--dsw-alias-state-business-primary);margin:0;width:12px;height:12px}
+/* "Generate commit message" sits next to the amend toggle; it is a quiet action,
+ * not a primary one, because committing is still the primary action. */
+.dshg-genbtn{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l2);border-radius:99px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap;line-height:1}
+.dshg-genbtn svg{width:12px;height:12px;flex:none;color:var(--dsw-alias-state-business-primary)}
+.dshg-genbtn:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-business-primary)}
+.dshg-genbtn[disabled]{opacity:.45;cursor:default}
 
 /* ---- section list ---- */
-.dshg-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.dshg-list{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.dshg-body{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:row;overflow:hidden}
+.dshg-root[data-side=true] .dshg-body{flex:1 1 auto;min-height:180px}
+/* Direct children of .dshg-body are the columns; each must be able to scroll. */
+.dshg-body > *{min-width:0;min-height:0}
+.dshg-list{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
 .dshg-list::-webkit-scrollbar{width:10px}
 .dshg-list::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l1);border-radius:5px;border:2px solid transparent;background-clip:content-box}
 .dshg-list::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-scrollbar-hover-l1);background-clip:content-box}
 .dshg-section{display:flex;flex-direction:column}
-.dshg-sechead{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:5px;padding:5px 8px 5px 4px;background:var(--dsw-alias-bg-layer-1);border-bottom:.5px solid var(--dsw-alias-border-l3);cursor:pointer;user-select:none}
+.dshg-sechead{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:5px;padding:5px 8px 5px 4px;${SURFACE_CSS};border-bottom:.5px solid var(--dsw-alias-border-l3);cursor:pointer;user-select:none}
 .dshg-sechead:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dshg-caret{flex:none;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);transition:transform .12s ease}
 .dshg-caret svg{width:12px;height:12px}
@@ -71,10 +134,11 @@ export const CSS = `
 .dshg-sectitle{font-size:11px;font-weight:600;letter-spacing:.02em;color:var(--dsw-alias-label-secondary)}
 .dshg-count{min-width:16px;height:16px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;border-radius:99px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font-size:10px;line-height:1;font-variant-numeric:tabular-nums}
 .dshg-secactions{margin-left:auto;display:flex;align-items:center;gap:2px}
-.dshg-mini{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:0;line-height:1}
+.dshg-mini{min-width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:0 3px;line-height:1;font:inherit;font-size:10px}
 .dshg-mini svg{width:13px;height:13px}
 .dshg-mini:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshg-mini[disabled]{opacity:.4;cursor:default;background:transparent}
+.dshg-viewtoggle{letter-spacing:.02em}
 
 /* ---- file row (VS Code SCM row: name … [5, M] then hover actions) ---- */
 .dshg-row{display:flex;align-items:center;gap:6px;min-height:24px;padding:0 8px 0 4px;cursor:pointer;background:transparent;border:0;width:100%;text-align:left;font:inherit;color:inherit}
@@ -98,7 +162,6 @@ export const CSS = `
 .dshg-letter-U{color:var(--dsw-alias-state-success-primary)}
 .dshg-letter-C{color:var(--dsw-alias-label-tertiary)}
 .dshg-letter-T{color:var(--dsw-alias-state-warn-primary)}
-.dshg-letter-\\!{color:var(--dsw-alias-label-quaternary)}
 
 /* ---- graph ---- */
 .dshg-grow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;height:26px;padding-right:8px;cursor:pointer;border:0;background:transparent;width:100%;text-align:left;font:inherit;color:inherit}
@@ -115,13 +178,19 @@ export const CSS = `
 .dshg-gside{flex:none;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-quaternary);font-variant-numeric:tabular-nums}
 .dshg-gsha{font-family:var(--dsh-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:11px}
 
-/* ---- diff viewer ---- */
-.dshg-diff{flex:0 1 auto;border-top:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-base);max-height:48%;display:flex;flex-direction:column;min-height:120px}
+/* ---- diff viewer (side panel) ----
+ * The diff lives BESIDE the list, not under it: the popup widens and the body
+ * becomes a two-column split, so the change list keeps its height and the diff
+ * gets the full panel height instead of a sliver at the bottom.
+ */
+.dshg-list-graph{padding-bottom:4px}
+.dshg-sechead.dshg-static{cursor:default;position:sticky;top:0;z-index:2}
+.dshg-diff{flex:1 1 60%;min-width:320px;border-left:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-base);display:flex;flex-direction:column;min-height:0;max-height:none}
 .dshg-diffhead{flex:none;display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .dshg-diffhead svg{width:12px;height:12px;flex:none}
 .dshg-diffpath{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
 .dshg-diffbody{flex:1;min-height:0;overflow:auto;font-family:var(--dsh-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.55}
-.dshg-diffbody table{border-collapse:collapse;width:100%;table-layout:fixed}
+.dshg-difftable{border-collapse:collapse;width:100%;table-layout:fixed}
 .dshg-hunk{background:var(--dsw-alias-markdown-code-block-banner);color:var(--dsw-alias-label-tertiary)}
 .dshg-hunk td{padding:2px 8px;font-size:11px;word-break:break-all}
 .dshg-num{width:36px;min-width:36px;padding:0 5px;text-align:right;color:var(--dsw-alias-label-quaternary);user-select:none;vertical-align:top;font-variant-numeric:tabular-nums}
@@ -132,32 +201,50 @@ export const CSS = `
 .dshg-ln-del .dshg-num{background:var(--dsw-alias-file-diff-deleted-gutter)}
 .dshg-diffempty{padding:14px;text-align:center;font-size:12px;color:var(--dsw-alias-label-tertiary);word-break:break-word}
 
+/* ---- side-by-side diff (VS Code style) ----
+ * Each side is EXACTLY half of the visible width. The grid must never size itself
+ * to its longest line (that made one column run off the panel and forced a
+ * horizontal scroll to read anything), so columns are minmax(0,1fr) with
+ * overflow hidden and the code cells wrap inside their own half.
+ */
+.dshg-diffbody-split{overflow:auto;overflow-x:hidden}
+.dshg-splitview{display:flex;flex-direction:column;width:100%;min-width:0}
+.dshg-srow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100%;min-width:0}
+.dshg-scell{display:grid;grid-template-columns:34px 12px minmax(0,1fr);align-items:start;min-width:0;overflow:hidden;padding-right:4px}
+.dshg-scell + .dshg-scell{border-left:.5px solid var(--dsw-alias-border-l3)}
+.dshg-snum{padding:0 4px;text-align:right;color:var(--dsw-alias-label-quaternary);user-select:none;font-variant-numeric:tabular-nums;font-size:10.5px;overflow:hidden}
+.dshg-smark{user-select:none;color:var(--dsw-alias-label-quaternary);text-align:center}
+.dshg-scode{min-width:0;padding-right:2px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.dshg-scell.dshg-ln-add .dshg-snum{background:var(--dsw-alias-file-diff-added-gutter)}
+.dshg-scell.dshg-ln-del .dshg-snum{background:var(--dsw-alias-file-diff-deleted-gutter)}
+.dshg-scell.dshg-ln-add .dshg-smark{color:var(--dsw-alias-state-success-primary)}
+.dshg-scell.dshg-ln-del .dshg-smark{color:var(--dsw-alias-state-error-primary)}
+/* A cell with no counterpart on that side: hatched, so it reads as "nothing here". */
+.dshg-ln-void{background:repeating-linear-gradient(135deg,transparent 0 6px,var(--dsw-alias-bg-layer-2) 6px 12px)}
+.dshg-ln-void .dshg-snum,.dshg-ln-void .dshg-scode{opacity:.35}
+.dshg-shunk{grid-column:1/-1;padding:2px 8px;font-size:11px;word-break:break-all;background:var(--dsw-alias-markdown-code-block-banner);color:var(--dsw-alias-label-tertiary)}
+
 /* ---- states ---- */
 .dshg-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:34px 20px;text-align:center;color:var(--dsw-alias-label-tertiary)}
 .dshg-empty svg{width:24px;height:24px;color:var(--dsw-alias-label-quaternary)}
 .dshg-empty-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-secondary)}
 .dshg-empty-body{font-size:11.5px;line-height:1.6;max-width:34em}
-.dshg-err{margin:8px 12px;padding:7px 10px;border-radius:8px;border:.5px solid color-mix(in srgb,var(--dsw-alias-state-error-primary) 40%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary);font-size:11.5px;line-height:1.5;word-break:break-word;max-height:96px;overflow:auto}
-.dshg-loading{display:flex;align-items:center;justify-content:center;gap:8px;padding:26px;color:var(--dsw-alias-label-tertiary);font-size:12px}
-.dshg-foot{flex:none;display:flex;align-items:center;gap:10px;padding:5px 10px;border-top:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-quaternary);background:var(--dsw-alias-bg-layer-1);white-space:nowrap;overflow:hidden}
-.dshg-foot b{font-weight:500;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.dshg-err{margin:8px 12px;padding:7px 10px;border-radius:8px;border:.5px solid color-mix(in srgb,var(--dsw-alias-state-error-primary) 40%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,var(--dsw-alias-bg-base));color:var(--dsw-alias-state-error-primary);font-size:11.5px;line-height:1.5;word-break:break-word;max-height:96px;overflow:auto}
 .dshg-err-close{float:right;border:0;background:transparent;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
+.dshg-loading{display:flex;align-items:center;justify-content:center;gap:8px;padding:26px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dshg-foot{flex:none;display:flex;align-items:center;gap:10px;padding:5px 10px;border-top:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-quaternary);${SURFACE_CSS};white-space:nowrap;overflow:hidden}
+.dshg-foot b{font-weight:500;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
 
 /* ---- tabs ---- */
-.dshg-tabs{flex:none;display:flex;align-items:center;gap:2px;padding:0 10px;border-bottom:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-1)}
+.dshg-tabs{flex:none;display:flex;align-items:center;gap:2px;padding:0 10px;border-bottom:.5px solid var(--dsw-alias-border-l3);${SURFACE_CSS}}
 .dshg-tab{position:relative;display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 8px;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
 .dshg-tab:hover{color:var(--dsw-alias-label-primary)}
 .dshg-tab-on{color:var(--dsw-alias-label-primary);font-weight:500}
 .dshg-tab-on:after{content:'';position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:var(--dsw-alias-state-business-primary)}
 .dshg-tab .dshg-count{margin-left:1px}
 
-/* ---- panes ---- */
-.dshg-pane{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.dshg-list-graph{padding-bottom:4px}
-.dshg-sechead.dshg-static{cursor:default;position:sticky;top:0;z-index:2}
-
-/* ---- menu / popover ---- */
-.dshg-menu{position:fixed;z-index:2147482100;display:flex;flex-direction:column;padding:4px;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l2);border-radius:10px;box-shadow:0 14px 40px -10px rgba(0,0,0,.5),0 3px 10px -4px rgba(0,0,0,.3);max-height:min(70vh,520px);overflow:hidden}
+/* ---- menu / popover (floating: owns its own opaque surface) ---- */
+.dshg-menu{position:fixed;z-index:2147482100;display:flex;flex-direction:column;padding:4px;${MENU_CSS};isolation:isolate;border:.5px solid var(--dsw-alias-border-l2);border-radius:10px;box-shadow:0 14px 40px -10px rgba(0,0,0,.5),0 3px 10px -4px rgba(0,0,0,.3);max-height:min(70vh,520px);overflow:hidden}
 .dshg-menu-scroll{overflow:auto;max-height:min(46vh,340px)}
 .dshg-menu-head{padding:5px 8px 3px;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dsw-alias-label-quaternary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dshg-menu-item{display:flex;align-items:center;gap:8px;width:100%;min-height:26px;padding:3px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}
@@ -179,7 +266,7 @@ export const CSS = `
 
 /* ---- confirm dialog ---- */
 .dshg-confirm-mask{position:fixed;inset:0;z-index:2147482200;display:flex;align-items:center;justify-content:center;background:var(--dsw-alias-bg-mask-1,#00000059);backdrop-filter:blur(2px)}
-.dshg-confirm{width:min(380px,calc(100vw - 32px));padding:16px;border-radius:12px;background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l2);box-shadow:0 20px 50px -12px rgba(0,0,0,.55)}
+.dshg-confirm{width:min(380px,calc(100vw - 32px));padding:16px;border-radius:12px;${SURFACE_CSS};isolation:isolate;border:.5px solid var(--dsw-alias-border-l2);box-shadow:0 20px 50px -12px rgba(0,0,0,.55)}
 .dshg-confirm-title{font-size:13px;font-weight:600;margin-bottom:8px}
 .dshg-confirm-body{font-size:12px;line-height:1.65;color:var(--dsw-alias-label-secondary);word-break:break-word}
 .dshg-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
@@ -189,7 +276,11 @@ export const CSS = `
 .dshg-danger-btn:hover{filter:brightness(1.08)}
 
 /* ---- commit detail ---- */
-.dshg-cdetail{max-height:62%}
+/* Same column geometry as the compare panel: a flex child that shares the row.
+ * flex:0 0 auto would let the content pick its own width (a long patch line
+ * pushed it past 1000000px and squeezed the list to 0) — it must share instead.
+ */
+.dshg-cdetail{flex:1 1 60%;min-width:320px}
 .dshg-cmeta{flex:none;padding:8px 10px;border-bottom:.5px solid var(--dsw-alias-border-l3);display:flex;flex-direction:column;gap:5px;font-family:inherit}
 .dshg-cmeta-subject{font-size:12.5px;font-weight:600;line-height:1.45;word-break:break-word}
 .dshg-cmeta-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dsw-alias-label-tertiary);flex-wrap:wrap}
@@ -197,6 +288,19 @@ export const CSS = `
 .dshg-cmeta-files{display:flex;flex-direction:column;gap:1px;max-height:88px;overflow:auto}
 .dshg-cfile{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
 .dshg-cfile-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
+
+/* ---- upstream compare ---- */
+.dshg-compare{flex:1 1 60%;min-width:320px}
+.dshg-cmp-body{display:flex;flex-direction:column;font-family:inherit}
+.dshg-cmp-group{display:flex;flex-direction:column}
+.dshg-cmp-arrow{flex:none;width:14px;text-align:center;font-size:12px;font-weight:700;line-height:1}
+.dshg-cmp-in{color:var(--dsw-alias-state-warn-primary)}
+.dshg-cmp-out{color:var(--dsw-alias-state-success-primary)}
+.dshg-cmp-row{display:flex;align-items:center;gap:8px;min-height:24px;padding:0 8px;cursor:pointer;background:transparent}
+.dshg-cmp-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshg-cmp-row:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
+.dshg-cmp-subject{min-width:0;flex:1;font-size:12px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshg-cmp-empty{padding:8px 12px;font-size:11px;color:var(--dsw-alias-label-quaternary)}
 
 /* ---- terminal ---- */
 .dshg-term{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base)}
@@ -217,7 +321,7 @@ export const CSS = `
 .dshg-chip{flex:none;height:20px;padding:0 7px;border:.5px solid var(--dsw-alias-border-l2);border-radius:99px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font:inherit;font-size:10.5px;cursor:pointer;white-space:nowrap}
 .dshg-chip:hover:not([disabled]){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-business-primary)}
 .dshg-chip[disabled]{opacity:.45;cursor:default}
-.dshg-term-inputrow{flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;border-top:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-1)}
+.dshg-term-inputrow{flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;border-top:.5px solid var(--dsw-alias-border-l3);${SURFACE_CSS}}
 .dshg-term-field{flex:1;min-width:0;height:28px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsh-code-font-family,ui-monospace,monospace);font-size:11.5px;outline:none}
 .dshg-term-field:focus{border-color:var(--dsw-alias-state-business-primary)}
 .dshg-term-run{flex:none;width:auto;padding:0 12px;height:28px;font-size:12px}

@@ -1,10 +1,18 @@
 /**
- * Unified-patch parsing and rendering, shared by the working-tree file diff and
- * the commit detail view.
+ * Unified-patch parsing and rendering.
+ *
+ * Two views come out of the same parse:
+ *
+ * - `DiffBody`      inline (one column, `+`/`-` line markers) — used when the
+ *                   panel is narrow.
+ * - `DiffBodySplit` VS Code's side-by-side: old text on the left, new text on
+ *                   the right, aligned by pairing each removed run with the
+ *                   added run that follows it. Both gutters keep real line
+ *                   numbers, so a hunk reads exactly like the editor.
  *
  * File headers (`diff --git`, `index`, `---`/`+++`, mode lines) are dropped: they
- * carry no content and VS Code's diff view hides them too. A hunk header is kept
- * but only its `@@ … @@` tail, which is the part that says *where* you are.
+ * carry no content and VS Code hides them too. A hunk header keeps only its
+ * `@@ … @@` tail, which is the part that says *where* you are.
  */
 import * as React from 'react'
 
@@ -84,6 +92,8 @@ export function countPatch(patch: string): { added: number; removed: number } {
   return { added, removed }
 }
 
+/* --------------------------------------------------------------- inline view */
+
 export function DiffBody(props: { patch: string; empty?: string }): React.ReactElement {
   const rows = parsePatch(props.patch)
   if (rows.length === 0) {
@@ -91,9 +101,7 @@ export function DiffBody(props: { patch: string; empty?: string }): React.ReactE
   }
   return React.createElement(
     'table',
-    null,
-    // Explicit widths: `table-layout: fixed` reads the colgroup, not the first
-    // row (a hunk row spans all three columns and would equalise them).
+    { className: 'dshg-difftable' },
     React.createElement(
       'colgroup',
       null,
@@ -122,6 +130,123 @@ export function DiffBody(props: { patch: string; empty?: string }): React.ReactE
               React.createElement('td', { className: 'dshg-code' }, row.text === '' ? ' ' : row.text),
             ),
       ),
+    ),
+  )
+}
+
+/* --------------------------------------------------------------- split view */
+
+interface SplitCell {
+  kind: 'add' | 'del' | 'ctx' | 'void'
+  no: number | null
+  text: string
+}
+
+interface SplitRow {
+  kind: 'pair' | 'hunk'
+  text?: string
+  left: SplitCell
+  right: SplitCell
+}
+
+const EMPTY = (): SplitCell => ({ kind: 'void', no: null, text: '' })
+
+/**
+ * Pair removed lines against the added lines that follow them, index by index.
+ *
+ * That is how a replacement looks in a two-column diff: the 1st removed line sits
+ * opposite the 1st added line, and whichever side runs out is padded with a void
+ * cell. Lines that exist only on one side get a void opposite them.
+ */
+export function toSplitRows(rows: DiffLine[]): SplitRow[] {
+  const out: SplitRow[] = []
+  let dels: DiffLine[] = []
+  let adds: DiffLine[] = []
+
+  const flush = (): void => {
+    const count = Math.max(dels.length, adds.length)
+    for (let index = 0; index < count; index += 1) {
+      const del = dels[index]
+      const add = adds[index]
+      out.push({
+        kind: 'pair',
+        left:
+          del === undefined
+            ? EMPTY()
+            : { kind: 'del', no: del.oldNo, text: del.text },
+        right:
+          add === undefined
+            ? EMPTY()
+            : { kind: 'add', no: add.newNo, text: add.text },
+      })
+    }
+    dels = []
+    adds = []
+  }
+
+  for (const row of rows) {
+    if (row.kind === 'hunk') {
+      flush()
+      out.push({ kind: 'hunk', text: row.text, left: EMPTY(), right: EMPTY() })
+      continue
+    }
+    if (row.kind === 'del') {
+      // A `del` after an `add` closes the previous replacement block.
+      if (adds.length > 0) flush()
+      dels.push(row)
+      continue
+    }
+    if (row.kind === 'add') {
+      adds.push(row)
+      continue
+    }
+    flush()
+    const cell: SplitCell = { kind: 'ctx', no: row.oldNo ?? row.newNo, text: row.text }
+    out.push({
+      kind: 'pair',
+      left: cell,
+      right: { kind: 'ctx', no: row.newNo ?? row.oldNo, text: row.text },
+    })
+  }
+  flush()
+  return out
+}
+
+function SplitSide(props: { cell: SplitCell; side: 'left' | 'right' }): React.ReactElement {
+  const { cell, side } = props
+  const tone =
+    cell.kind === 'add' ? ' dshg-ln-add' : cell.kind === 'del' ? ' dshg-ln-del' : cell.kind === 'void' ? ' dshg-ln-void' : ''
+  return React.createElement(
+    'div',
+    { className: `dshg-scell${tone}`, 'data-side': side },
+    React.createElement('span', { className: 'dshg-snum' }, cell.no === null ? '' : String(cell.no)),
+    React.createElement('span', { className: 'dshg-smark' }, cell.kind === 'add' ? '+' : cell.kind === 'del' ? '−' : ' '),
+    React.createElement('span', { className: 'dshg-scode' }, cell.text === '' ? ' ' : cell.text),
+  )
+}
+
+/**
+ * Side-by-side diff. Rendered as a plain grid (not a table) so both columns keep
+ * their own horizontal overflow while sharing the vertical scroll — a wide line
+ * on one side never drags the other side's gutter out of view.
+ */
+export function DiffBodySplit(props: { patch: string; empty?: string }): React.ReactElement {
+  const rows = toSplitRows(parsePatch(props.patch))
+  if (rows.length === 0) {
+    return React.createElement('div', { className: 'dshg-diffempty' }, props.empty ?? '没有可显示的差异')
+  }
+  return React.createElement(
+    'div',
+    { className: 'dshg-splitview' },
+    ...rows.map((row, index) =>
+      row.kind === 'hunk'
+        ? React.createElement('div', { key: index, className: 'dshg-shunk' }, row.text)
+        : React.createElement(
+            'div',
+            { key: index, className: 'dshg-srow' },
+            React.createElement(SplitSide, { cell: row.left, side: 'left' }),
+            React.createElement(SplitSide, { cell: row.right, side: 'right' }),
+          ),
     ),
   )
 }

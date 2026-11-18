@@ -38,6 +38,7 @@ import {
   commit,
   commitAction,
   commitDetail,
+  compare,
   deleteBranch,
   diff,
   discard,
@@ -54,6 +55,7 @@ import {
   unstage,
 } from './git.js'
 import type { CommitAction } from './git.js'
+import { generateCommitMessage } from './generate.js'
 
 export const name = 'wagq-dsh-git'
 
@@ -73,6 +75,7 @@ interface Body {
   path?: unknown
   staged?: unknown
   action?: unknown
+  sessionId?: unknown
   remote?: unknown
   branch?: unknown
   target?: unknown
@@ -287,6 +290,30 @@ export function apply(ctx: HostContext) {
           }
           const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
           sendJson(res, 200, { ok: true, remotes: await remotes(cwd) })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/compare`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          sendJson(res, 200, { ok: true, ...(await compare(cwd, Number(url.searchParams.get('limit') ?? 40))) })
+          return
+        }
+
+        // Model-generated commit message: uses the session's own model.
+        if (url.pathname === `${PREFIX}/api/generate-message`) {
+          if (req.method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const bodyGen = await readBody(req)
+          const cwd = await resolveRepoDir(typeof bodyGen.cwd === 'string' ? bodyGen.cwd : fallbackCwd)
+          const sessionId = typeof bodyGen.sessionId === 'string' ? bodyGen.sessionId : ''
+          const result = await generateCommitMessage(ctx, cwd, sessionId)
+          sendJson(res, 200, { ok: true, ...result })
           return
         }
 

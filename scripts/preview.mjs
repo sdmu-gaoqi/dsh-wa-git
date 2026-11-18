@@ -83,6 +83,7 @@ if (data.state) {
     message: () => Promise.resolve(data.message),
     branches: () => Promise.resolve(data.branches),
     remotes: () => Promise.resolve(data.remotes),
+    compare: () => Promise.resolve(data.compare),
     commitDetail: (cwd_, sha) => Promise.resolve(
       data.commits[sha] ?? { ok: true, commit: data.commits[Object.keys(data.commits)[0]] },
     ),
@@ -150,13 +151,33 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     commits[commit.sha] = { ok: true, commit: commitFixture(target, commit.sha) }
   }
   const terminal = terminalFixture(target)
+  // Compare fixture: pretend HEAD is 2 ahead and 1 behind, which is the shape the
+  // panel is designed around (both columns non-empty).
+  const compare = {
+    ok: true,
+    upstream: 'origin/main',
+    ahead: state.commits.slice(0, 2).map((commit) => ({
+      sha: commit.sha,
+      short: commit.short,
+      author: commit.author,
+      time: commit.time,
+      subject: commit.subject,
+    })),
+    behind: [
+      { sha: 'b'.repeat(40), short: 'bbbbbbb', author: 'teammate', time: Math.floor(Date.now() / 1000) - 5400, subject: 'fix: 远端修复了一个边界条件' },
+    ],
+  }
 
+  // `--alpha` reproduces the dream-skin case: layer tokens carry transparency so
+  // artwork shows through panels. A floating dialog must still be opaque.
+  const alpha = process.argv.includes('--alpha')
+  const layer = (solid) => (alpha ? `${solid}80` : solid)
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>@wagq/dsh-git preview</title>
 <style>
   :root{
-    --dsw-alias-bg-base:#16181d; --dsw-alias-bg-layer-1:#1c1f26; --dsw-alias-bg-layer-2:#22262e;
-    --dsw-alias-bg-layer-3:#282d36; --dsw-alias-bg-overlay:#1c1f26;
+    --dsw-alias-bg-base:#16181d; --dsw-alias-bg-layer-1:${layer('#1c1f26')}; --dsw-alias-bg-layer-2:${layer('#22262e')};
+    --dsw-alias-bg-layer-3:${layer('#282d36')}; --dsw-alias-bg-overlay:${layer('#1c1f26')};
     --dsw-alias-border-l1:#2c313a; --dsw-alias-border-l2:#333944; --dsw-alias-border-l3:#2a2f38;
     --dsw-alias-label-primary:#e8eaee; --dsw-alias-label-secondary:#b6bcc8;
     --dsw-alias-label-tertiary:#8b94a3; --dsw-alias-label-quaternary:#6b7483;
@@ -165,17 +186,23 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     --dsw-alias-state-business-primary:#4d8dff; --dsw-alias-state-success-primary:#3fb950;
     --dsw-alias-state-error-primary:#f85149; --dsw-alias-state-warn-primary:#d29922;
     --dsw-alias-scrollbar-bg-l1:#3a4049; --dsw-alias-scrollbar-hover-l1:#4a515c;
-    --dsw-alias-file-diff-added-bg:#1b3a26; --dsw-alias-file-diff-deleted-bg:#3d1d1f;
+    --dsw-alias-file-diff-added-bg:${alpha ? '#1b3a26cc' : '#1b3a26'}; --dsw-alias-file-diff-deleted-bg:${alpha ? '#3d1d1fcc' : '#3d1d1f'};
     --dsw-alias-file-diff-added-gutter:#22502f; --dsw-alias-file-diff-deleted-gutter:#5a2427;
-    --dsw-alias-markdown-code-block-banner:#232830;
+    --dsw-alias-markdown-code-block-banner:${layer('#232830')};
     --dsh-code-font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   body{margin:0;height:100vh;background:linear-gradient(160deg,#1a1d24,#0f1116 60%);font:13px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;color:#e8eaee}
   #app{height:100%}
   .chrome{position:fixed;left:24px;top:20px;font-size:12px;color:#6b7483}
+  /* Standing content behind the dialog: any bleed-through would show as text here. */
+  .behind{position:fixed;left:24px;top:64px;width:520px;font-size:14px;line-height:1.9;color:#cfd6e2}
+  .behind b{color:#8fb7ff}
 </style></head>
 <body>
-<div class="chrome">DSH · @wagq/dsh-git · 源代码管理弹窗预览</div>
+<div class="chrome">DSH · @wagq/dsh-git · 源代码管理弹窗预览${alpha ? '（半透明皮肤模拟）' : ''}</div>
+<div class="behind"><b>BEHIND THE DIALOG — 这行字不该透进弹窗</b><br>
+如果弹窗底色是半透明的，这一段会从弹窗里透出来。<br>
+如果底色不透明，只有弹窗边缘之外能看到它。</div>
 <div id="app"></div>
 <script>window.__WAGQ_GIT_DATA__ = ${JSON.stringify({
     state,
@@ -183,6 +210,7 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     diffs,
     branches,
     remotes,
+    compare,
     commits,
     terminal,
     message: { ok: true, message: 'chore: 更新 2 个文件' },
@@ -213,12 +241,16 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     context: 'scm-popup-context.png',
     branches: 'scm-popup-branches.png',
     terminal: 'scm-popup-terminal.png',
+    compare: 'scm-popup-compare.png',
   }
   const file = shots[scene] ?? shots.changes
 
   if (scene === 'diff') {
     await page.locator('.dshg-row').first().click()
-    await page.waitForTimeout(400)
+    await page.waitForTimeout(500)
+  } else if (scene === 'compare') {
+    await page.locator('.dshg-ahead').first().click()
+    await page.waitForTimeout(600)
   } else if (scene === 'graph') {
     await page.getByRole('tab', { name: /图表/ }).click()
     await page.waitForTimeout(200)
@@ -248,6 +280,33 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
 
   const target_png = path.join(ROOT, 'preview', file)
   fs.mkdirSync(path.dirname(target_png), { recursive: true })
+  if (process.argv.includes('--measure')) {
+    const box = await page.evaluate(() => {
+      const pick = (selector) => {
+        const node = document.querySelector(selector)
+        if (node === null) return null
+        const rect = node.getBoundingClientRect()
+        const cs = getComputedStyle(node)
+        return {
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          display: cs.display,
+          flex: cs.flex,
+          background: cs.backgroundColor,
+          opacity: cs.opacity,
+        }
+      }
+      return {
+        root: pick('.dshg-root'),
+        body: pick('.dshg-body'),
+        list: pick('.dshg-body > .dshg-list'),
+        diff: pick('.dshg-diff'),
+        menu: pick('.dshg-menu'),
+        confirm: pick('.dshg-confirm'),
+      }
+    })
+    console.log('[measure]', JSON.stringify(box, null, 2))
+  }
   await page.screenshot({ path: target_png })
   await browser.close()
   console.log('[preview]', target_png)

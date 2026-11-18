@@ -29,10 +29,13 @@ conversation.session.header.utilities
 | 位置 | 能做什么 |
 | --- | --- |
 | **分支胶囊**（头部） | 点击弹出分支选择器：本地分支带 ahead/behind，远程分支点一下自动创建同名跟踪分支；底部可直接输入新分支名创建 |
+| **↑↓ 徽标**（头部） | 点击打开「与远程对比」侧栏：`落后（远端有、本地没有）` / `领先（本地有、远端没有）` 两组提交，点任一提交跳到该提交详情 |
 | **⋯ 按钮**（头部） | 拉取 / 推送 / 抓取、切换分支、暂存全部、远程管理、打开终端、刷新（同步项会显示 `落后 N` / `领先 N`） |
-| **更改页签** | 暂存 / 取消暂存 / 放弃；点文件看内联 diff |
-| **图表页签** | 点提交行 → 下方展开该提交的作者、时间、改动文件与完整 patch；**右键**提交 → 见下表 |
+| **更改页签** | 暂存 / 取消暂存 / 放弃；点文件看 diff（**在右侧并排展开**，不挤占列表）；标题栏「并排 / 行内」可切换 |
+| **图表页签** | 点提交行 → 右侧展开该提交的作者、时间、改动文件与完整 patch；**右键**提交 → 见下表 |
 | **终端页签** | 内嵌 git 终端，仓库根目录为起点，自由输入任意命令 |
+
+打开 diff / 提交详情 / 对比面板时，弹窗从 480px 自动加宽到 860px，正文变成左右两栏。
 
 ### 提交右键菜单
 
@@ -65,6 +68,7 @@ conversation.session.header.utilities
 | GET | `/api/state?cwd=&limit=` | 仓库信息 + `status --porcelain=v1 -z` + `log --all --date-order` |
 | GET | `/api/diff?cwd=&path=&staged=&from=` | 工作区 unified patch |
 | GET | `/api/message?cwd=` | 建议提交信息 |
+| GET | `/api/compare?cwd=&limit=` | `HEAD...@{upstream}` 的双向提交列表（落后 / 领先） |
 | GET | `/api/branches?cwd=` | 本地/远程分支 + `%(upstream:track)` 解析出的 ahead/behind |
 | GET | `/api/remotes?cwd=` | 远端列表（fetch/push URL） |
 | GET | `/api/commit?cwd=&sha=` | 单个提交的元信息、改动文件、patch |
@@ -94,8 +98,10 @@ conversation.session.header.utilities
 pnpm install
 pnpm run build      # tsc → dist/index.js；esbuild → dist/client.js（带 __ModuleLoader__ 外壳）
 pnpm run typecheck  # node 半侧 + 浏览器半侧分别过一遍类型
-pnpm run smoke      # 临时仓库跑全部路由 + react-dom/server 渲染按钮（38 项）
-pnpm run preview    # 无头 Chromium 截图，可加 --scene=changes|diff|graph|menu|context|branches|terminal
+pnpm run smoke      # 临时仓库跑全部路由 + react-dom/server 渲染按钮（42 项）
+pnpm run preview    # 无头 Chromium 截图，可加 --scene=changes|diff|graph|menu|context|branches|terminal|compare
+                    #   加 --alpha 模拟半透明皮肤，加 --measure 打印各栏实际尺寸
+node scripts/probe.mjs <url>   # 对运行中的实例读取真实令牌与弹窗计算样式
 ```
 
 `dist/client.js` 必须以 `window.__ModuleLoader__.load({ id, factory })` 开头。裸包名
@@ -115,6 +121,24 @@ dsh plugin --profile desktop add "link:D:/code/dsh plugin/dsh-wa-git"
 颜色只用 `--dsw-alias-*` 令牌（`label-*` / `bg-layer-*` / `border-l*` / `state-*` /
 `file-diff-*` / `scrollbar-*`），跟随宿主主题与皮肤。提交图泳道色是 `hsl()` 常量——它
 表达「哪条分支」而非语义，深浅主题下都验过对比度。
+
+**弹窗底色永远不透明。** 皮肤（如 `abyss`）会把 `--dsw-alias-bg-layer-*` **甚至 `--dsw-alias-bg-base`**
+声明成带 alpha 的颜色，好让背景艺术画透出来；浮层如果直接继承，页面上的文字就会从弹窗里读出来。
+而且 `color-mix(x 100%, transparent)` **并不会**把 alpha 提到 1——100% 权重的结果就是 `x` 原样。
+
+所以每个浮层自己合成底色，用两条声明：
+
+```css
+background-color: var(--dsw-alias-bg-base);        /* 不透明地板 */
+background-image: linear-gradient(L, L), linear-gradient(L, L), linear-gradient(L, L);  /* 主题色叠三层 */
+```
+
+layer 叠在不透明地板之上，剩余 alpha 再靠重复叠层几何收敛。菜单 / 确认框 / 分支选择器各自带这份
+配方——它们是 `.dshg-root` 的**兄弟节点**（必须逃出 dialog 的 `overflow:hidden`），不能指望继承
+dialog 上的变量。
+
+`pnpm run preview --scene=context --alpha` 用 50% alpha 的令牌复现皮肤场景，配合 `--measure`
+打印菜单实际计算出的 `background` 确认是 `rgb(...)` 而不是 `rgba(...,0.5)`。
 
 元素带 `data-dsh-plugin="wagq-dsh-git"` / `data-dsh-part="scm-button|scm-popup"` /
 `data-dsh-surface="overlay"`，符合 dsh-web 的皮肤契约。

@@ -326,6 +326,139 @@ async function testHost() {
   assert.equal(badSync.status, 400)
   ok('非法 sync action → 400')
 
+  // With no upstream the compare call must answer cleanly instead of 500.
+  const compareNoUpstream = await callRoute(route.handler, { url: `/wagq-git/api/compare?cwd=${encoded}` })
+  assert.equal(compareNoUpstream.status, 200, compareNoUpstream.text)
+  assert.equal(compareNoUpstream.json.upstream, '')
+  assert.deepEqual(compareNoUpstream.json.ahead, [])
+  ok('GET /api/compare 无上游时返回空列表')
+
+  // Build a real upstream: a second repo acting as `origin`, then fetch it.
+  const bareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wagq-git-bare-'))
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bareDir], { stdio: 'ignore' })
+  git('remote', 'add', 'origin', bareDir)
+  git('push', '-q', '-u', 'origin', 'main')
+  const compareSynced = await callRoute(route.handler, { url: `/wagq-git/api/compare?cwd=${encoded}` })
+  assert.equal(compareSynced.status, 200, compareSynced.text)
+  assert.equal(compareSynced.json.upstream, 'origin/main')
+  assert.equal(compareSynced.json.ahead.length, 0)
+  assert.equal(compareSynced.json.behind.length, 0)
+  ok('GET /api/compare 跟踪 origin/main（已同步）')
+
+  fs.writeFileSync(path.join(dir, 'ahead.txt'), 'x\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'feat: 本地领先的提交')
+  const compareAhead = await callRoute(route.handler, { url: `/wagq-git/api/compare?cwd=${encoded}` })
+  assert.equal(compareAhead.json.ahead.length, 1)
+  assert.equal(compareAhead.json.ahead[0].subject, 'feat: 本地领先的提交')
+  assert.equal(compareAhead.json.behind.length, 0)
+  ok('GET /api/compare 正确列出领先提交')
+
+  // A commit pushed from the "remote" side must show up as behind.
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'wagq-git-other-'))
+  execFileSync('git', ['clone', '-q', bareDir, other], { stdio: 'ignore' })
+  execFileSync('git', ['-C', other, 'config', 'user.name', 'Other'], { stdio: 'ignore' })
+  execFileSync('git', ['-C', other, 'config', 'user.email', 'other@example.com'], { stdio: 'ignore' })
+  fs.writeFileSync(path.join(other, 'behind.txt'), 'y\n')
+  execFileSync('git', ['-C', other, 'add', '.'], { stdio: 'ignore' })
+  execFileSync('git', ['-C', other, 'commit', '-q', '-m', 'feat: 远端多出来的提交'], { stdio: 'ignore' })
+  execFileSync('git', ['-C', other, 'push', '-q', 'origin', 'main'], { stdio: 'ignore' })
+  git('fetch', '-q', 'origin')
+
+  const compareBoth = await callRoute(route.handler, { url: `/wagq-git/api/compare?cwd=${encoded}` })
+  assert.equal(compareBoth.json.ahead.length, 1)
+  assert.equal(compareBoth.json.behind.length, 1)
+  assert.equal(compareBoth.json.behind[0].subject, 'feat: 远端多出来的提交')
+  ok('GET /api/compare 同时列出落后与领先（双向）')
+
+  git('reset', '-q', '--hard', 'HEAD')
+  fs.rmSync(bareDir, { recursive: true, force: true })
+  fs.rmSync(other, { recursive: true, force: true })
+
+  /* ---- generated commit message (the session's model) ---- */
+
+  fs.writeFileSync(path.join(dir, 'gen.txt'), 'hello\n')
+  git('add', '.')
+
+  // No model configured at all: must be a clean 409, not a crash.
+  const genNoModel = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/generate-message',
+    body: { cwd: dir, sessionId: '' },
+  })
+  assert.equal(genNoModel.status, 409, genNoModel.text)
+  ok('POST /api/generate-message 无可用模型 → 409')
+
+  // Wire a fake live agent exposing `model.current()` plus a fake llm stream.
+  const calls = []
+  ctx.get = (name) => {
+    if (name === 'agents') {
+      return {
+        get: (id) =>
+          id === 'session-1'
+            ? { model: { current: () => ({ provider: 'fake-provider', model: 'fake-model' }) } }
+            : undefined,
+      }
+    }
+    if (name === 'sessions') {
+      return { list: () => [{ id: 'session-1', header: { cwd: dir }, title: 'demo' }] }
+    }
+    if (name === 'llm') {
+      return {
+        stream: async function* (options) {
+          calls.push(options)
+          yield { type: 'block-start', index: 0 }
+          yield { type: 'text-delta', text: '```\n' }
+          yield { type: 'text-delta', text: 'feat: 加上 gen.txt\n' }
+          yield { type: 'text-delta', text: '```' }
+          yield { type: 'finish', finishReason: 'stop' }
+        },
+      }
+    }
+    return undefined
+  }
+
+  const gen = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/generate-message',
+    body: { cwd: dir, sessionId: 'session-1' },
+  })
+  assert.equal(gen.status, 200, gen.text)
+  assert.equal(gen.json.message, 'feat: 加上 gen.txt', 'code fence stripped')
+  assert.equal(gen.json.provider, 'fake-provider')
+  assert.equal(gen.json.model, 'fake-model')
+  ok('POST /api/generate-message 用会话模型生成并清理代码围栏')
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].provider, 'fake-provider', 'routes to the session model')
+  assert.equal(calls[0].model, 'fake-model')
+  const sent = JSON.stringify(calls[0].messages)
+  assert.ok(sent.includes('gen.txt'), 'prompt carries the changed file')
+  assert.ok(sent.includes('+hello'), 'prompt carries the diff hunk')
+  ok('生成请求带上文件清单与差异并走会话模型')
+
+  // A model that returns nothing must not produce an empty commit message.
+  ctx.get = ((original) => (name) => {
+    if (name === 'llm') {
+      return {
+        stream: async function* () {
+          yield { type: 'finish', finishReason: 'stop' }
+        },
+      }
+    }
+    return original(name)
+  })(ctx.get)
+
+  const genEmpty = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/generate-message',
+    body: { cwd: dir, sessionId: 'session-1' },
+  })
+  assert.equal(genEmpty.status, 502, genEmpty.text)
+  ok('模型返回空内容 → 502 而不是空提交消息')
+
+  git('reset', '-q', '--hard', 'HEAD')
+
   fs.writeFileSync(path.join(dir, 'second.txt'), 'two\n')
   git('add', '.')
   git('commit', '-q', '-m', 'chore: 第二个提交')

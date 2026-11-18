@@ -519,6 +519,78 @@ export async function commit(
   return { sha, short: sha.slice(0, 7), branch, summary }
 }
 
+/* ---------------------------------------------------------------- divergence */
+
+export interface CompareSide {
+  sha: string
+  short: string
+  author: string
+  time: number
+  subject: string
+}
+
+export interface CompareResult {
+  upstream: string
+  ahead: CompareSide[]
+  behind: CompareSide[]
+}
+
+/**
+ * What the local branch has that the upstream does not, and vice versa.
+ *
+ * This is the data behind "和远程对比": `--left-right` puts the upstream side on
+ * the left and HEAD on the right, which is exactly the two columns the panel
+ * shows. A branch with no upstream returns empty lists rather than an error, so
+ * the caller can offer "publish branch" instead.
+ */
+export async function compare(cwd: string, limit = 40): Promise<CompareResult> {
+  let upstream = ''
+  try {
+    upstream = (await gitOrThrow(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).trim()
+  } catch {
+    return { upstream: '', ahead: [], behind: [] }
+  }
+  if (upstream === '') return { upstream: '', ahead: [], behind: [] }
+
+  // `--left-right` only prints its `<`/`>` marker through `%m`; `%H` never
+  // carries it, so the marker must be spelled explicitly in the format.
+  // In `HEAD...upstream` the LEFT side is HEAD, so `<` means "only in HEAD"
+  // (ahead / outgoing) and `>` means "only in upstream" (behind / incoming).
+  const format = '%m%x1f%H%x1f%an%x1f%at%x1f%s%x1e'
+  let raw = ''
+  try {
+    raw = await gitOrThrow(cwd, [
+      'log',
+      '--left-right',
+      '--date-order',
+      `--max-count=${Math.min(Math.max(limit, 1), 200)}`,
+      `--pretty=format:${format}`,
+      `HEAD...${upstream}`,
+    ])
+  } catch {
+    return { upstream, ahead: [], behind: [] }
+  }
+
+  const ahead: CompareSide[] = []
+  const behind: CompareSide[] = []
+  for (const chunk of raw.split('\x1e')) {
+    const record = chunk.replace(/^\n+/, '')
+    if (record === '') continue
+    const [marker, sha, author, time, subject] = record.split('\x1f')
+    if (sha === undefined) continue
+    const side: CompareSide = {
+      sha,
+      short: sha.slice(0, 7),
+      author: author ?? '',
+      time: Number(time) || 0,
+      subject: subject ?? '',
+    }
+    if (marker === '<') ahead.push(side)
+    else if (marker === '>') behind.push(side)
+  }
+  return { upstream, ahead, behind }
+}
+
 /** A ready-to-edit commit message derived from the staged paths. */
 export async function suggestMessage(cwd: string): Promise<string> {
   const snapshot = await status(cwd)
