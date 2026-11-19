@@ -52,15 +52,23 @@
 
 需要本机装了 `git`，并且 `git` 在 PATH 里能直接运行。
 
-在项目目录的**父目录**执行（路径要写完整）：
+源码安装：
 
 ```sh
-dsh plugin --profile desktop add "link:D:/code/dsh plugin/dsh-wa-git"
+dsh plugin --profile web add github:sdmu-gaoqi/dsh-wa-git
 ```
 
 然后打开或重启 DSH。标题栏出现 Git 图标就说明装好了。
 
-> 如果你是开发者、改了插件源码，需要进插件目录跑一次 `pnpm install && pnpm run build`，再刷新页面或重启 DSH。
+发布到 npm 后可改用：
+
+```sh
+dsh plugin --profile web add @wagq/dsh-git
+```
+
+> 如果你是开发者、想用本地目录开发，可在插件目录的父目录执行
+> `dsh plugin --profile web add "link:D:/code/dsh plugin/dsh-wa-git"`，
+> 改完源码进插件目录跑一次 `pnpm install && pnpm run build`，再刷新页面或重启 DSH。
 
 ## 常见问题
 

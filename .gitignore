@@ -1,6 +1,7 @@
 node_modules/
 .idea/
-dist/
+# dist/ IS committed: package.json main points at dist/index.js, so a GitHub
+# source install needs the built files present in the repo.
 yalc.lock
 .yalc
 .eslintcache

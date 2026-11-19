@@ -1,8 +1,24 @@
 {
   "name": "@wagq/dsh-git",
-  "version": "0.2.0",
-  "description": "@wagq/dsh-git — 会话头部一枚 Git 图标按钮，点开是与 VS Code「源代码管理 / 图表」同构的 Git 面板（暂存、提交、提交图）。",
+  "version": "0.3.0",
+  "description": "在 DSH 会话标题栏加一枚 Git 按钮：像 VS Code 一样查看改动、提交、提交图、分支与远程、解决冲突，并支持用当前会话模型生成提交消息、内嵌 Git 终端和仓库文件浏览。",
   "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "git",
+    "source-control",
+    "scm",
+    "git-graph",
+    "文件浏览"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sdmu-gaoqi/dsh-wa-git.git"
+  },
+  "homepage": "https://github.com/sdmu-gaoqi/dsh-wa-git#readme",
+  "bugs": "https://github.com/sdmu-gaoqi/dsh-wa-git/issues",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
@@ -13,7 +29,13 @@
   "files": [
     "dist",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "preview/scm-popup.png",
+    "preview/scm-popup-compare.png",
+    "preview/scm-popup-diff.png",
+    "preview/scm-popup-terminal.png",
+    "preview/scm-popup-file-text.png"
   ],
   "dsh": {
     "bundle": {
@@ -48,7 +70,8 @@
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0 <0.3.0"
   },
   "dependencies": {
     "@deepseek-ai/dsh-native-command": "0.2.2-rc.1"
