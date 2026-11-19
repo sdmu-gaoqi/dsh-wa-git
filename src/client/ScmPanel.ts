@@ -30,6 +30,7 @@ import { layoutGraph, laneColor } from './graph'
 import type { GraphRow } from './graph'
 import { DiffBody, DiffBodySplit } from './parts/DiffBody'
 import { ConflictPanel } from './parts/ConflictPanel'
+import { ConfirmDialog } from './parts/ConfirmDialog'
 import { Menu } from './parts/Menu'
 import type { MenuItem } from './parts/Menu'
 import { Terminal } from './parts/Terminal'
@@ -717,7 +718,15 @@ function Popup(props: PopupProps): React.ReactElement {
   }
   const [commitSha, setCommitSha] = React.useState('')
   const [detail, setDetail] = React.useState<CommitDetail | null>(null)
-  const [confirm, setConfirm] = React.useState<{ title: string; body: string; run: () => void } | null>(null)
+  /** A confirm dialog, optionally with text fields (remote add / edit URL). */
+  const [confirm, setConfirm] = React.useState<{
+    title: string
+    body: string
+    fields?: Array<{ name: string; label: string; value: string; placeholder?: string }>
+    okLabel?: string
+    danger?: boolean
+    run: (values: Record<string, string>) => void
+  } | null>(null)
   /** `true` while the 「与远程对比」 side panel is open. */
   const [compareOpen, setCompareOpen] = React.useState(false)
   /** Side-by-side (VS Code style) vs inline diff. Remembered for this popup. */
@@ -912,11 +921,18 @@ function Popup(props: PopupProps): React.ReactElement {
       {
         id: 'url',
         label: '修改地址…',
-        onSelect: () => {
-          const next = window.prompt(`修改 ${remote.name} 的 URL`, remote.url)
-          if (next === null || next.trim() === '' || next.trim() === remote.url) return
-          run('remote', () => api.setRemoteUrl(cwd, remote.name, next.trim()))
-        },
+        onSelect: () =>
+          setConfirm({
+            title: `修改 ${remote.name} 的地址`,
+            body: '填新的 URL 后保存；clone / fetch / push 都会改用这个地址。',
+            fields: [{ name: 'url', label: '远端 URL', value: remote.url, placeholder: 'https://… 或 git@…' }],
+            okLabel: '保存',
+            run: (values) => {
+              const next = (values.url ?? '').trim()
+              if (next === '' || next === remote.url) return
+              run('remote', () => api.setRemoteUrl(cwd, remote.name, next))
+            },
+          }),
       },
       {
         id: 'remove',
@@ -927,6 +943,8 @@ function Popup(props: PopupProps): React.ReactElement {
           setConfirm({
             title: `删除远端 ${remote.name}`,
             body: '这会移除本地对它的配置，不会影响远端服务器上的仓库。',
+            danger: true,
+            okLabel: '删除',
             run: () => run('remote', () => api.removeRemote(cwd, remote.name)),
           }),
       },
@@ -934,11 +952,21 @@ function Popup(props: PopupProps): React.ReactElement {
   }
 
   const addRemoteFlow = (): void => {
-    const name = window.prompt('新远端名称', 'origin')
-    if (name === null || name.trim() === '') return
-    const url = window.prompt('远端 URL（https 或 git@）', '')
-    if (url === null || url.trim() === '') return
-    run('remote', () => api.addRemote(cwd, name.trim(), url.trim()))
+    setConfirm({
+      title: '添加远端',
+      body: '加好后就可以拉取和推送了。名称通常是 origin、upstream 之类的短名字。',
+      fields: [
+        { name: 'name', label: '名称', value: 'origin', placeholder: 'origin' },
+        { name: 'url', label: 'URL', value: '', placeholder: 'https://… 或 git@…' },
+      ],
+      okLabel: '添加',
+      run: (values) => {
+        const name = (values.name ?? '').trim()
+        const url = (values.url ?? '').trim()
+        if (name === '' || url === '') return
+        run('remote', () => api.addRemote(cwd, name, url))
+      },
+    })
   }
 
   /* ---- commit context menu ---- */
@@ -1003,6 +1031,7 @@ function Popup(props: PopupProps): React.ReactElement {
             setConfirm({
               title: `rebase 到 ${commit.short}`,
               body: '当前分支的提交会被重放到这个提交之上，历史会被改写（已推送的提交需要强推）。',
+              danger: true,
               run: () =>
                 run('commit-action', () =>
                   api.commitAction(cwd, commit.sha, 'rebase').then((result) => notify(result.summary)),
@@ -1023,6 +1052,8 @@ function Popup(props: PopupProps): React.ReactElement {
     setConfirm({
       title: `${label}到 ${commit.short}`,
       body,
+      danger: true,
+      okLabel: '确认执行',
       run: () =>
         run('commit-action', () => api.commitAction(cwd, commit.sha, action).then((result) => notify(result.summary))),
     })
@@ -1786,38 +1817,10 @@ function Popup(props: PopupProps): React.ReactElement {
         })
       : null,
     confirm !== null
-      ? React.createElement(
-          'div',
-          { className: 'dshg-confirm-mask', onClick: () => setConfirm(null) },
-          React.createElement(
-            'div',
-            { className: 'dshg-confirm', onClick: (event: React.MouseEvent) => event.stopPropagation() },
-            React.createElement('div', { className: 'dshg-confirm-title' }, confirm.title),
-            React.createElement('div', { className: 'dshg-confirm-body' }, confirm.body),
-            React.createElement(
-              'div',
-              { className: 'dshg-confirm-actions' },
-              React.createElement(
-                'button',
-                { type: 'button', className: 'dshg-ghost', onClick: () => setConfirm(null) },
-                '取消',
-              ),
-              React.createElement(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dshg-danger-btn',
-                  onClick: () => {
-                    const task = confirm.run
-                    setConfirm(null)
-                    task()
-                  },
-                },
-                '确认执行',
-              ),
-            ),
-          ),
-        )
+      ? React.createElement(ConfirmDialog, {
+          confirm,
+          onClose: () => setConfirm(null),
+        })
       : null,
   )
 }

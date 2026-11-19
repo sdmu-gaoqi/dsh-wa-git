@@ -244,6 +244,7 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     compare: 'scm-popup-compare.png',
     remotes: 'scm-popup-remotes.png',
     'branch-menu': 'scm-popup-branch-menu.png',
+    'add-remote': 'scm-popup-add-remote.png',
   }
   const file = shots[scene] ?? shots.changes
 
@@ -274,6 +275,13 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     await page.waitForTimeout(200)
     await page.getByRole('menuitem', { name: /远程管理/ }).click()
     await page.waitForTimeout(400)
+  } else if (scene === 'add-remote') {
+    await page.locator('button[title="更多操作"]').click()
+    await page.waitForTimeout(180)
+    await page.getByRole('menuitem', { name: /远程管理/ }).click()
+    await page.waitForTimeout(300)
+    await page.getByRole('menuitem', { name: /添加远端/ }).click()
+    await page.waitForTimeout(300)
   } else if (scene === 'branch-menu') {
     await page.locator('.dshg-branch-btn').click()
     await page.waitForTimeout(250)
@@ -317,6 +325,7 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
         diff: pick('.dshg-diff'),
         menu: pick('.dshg-menu'),
         confirm: pick('.dshg-confirm'),
+        confirmFields: document.querySelectorAll('.dshg-confirm-field').length,
         button: (() => {
           const node = document.querySelector('button[title="更多操作"]')
           if (node === null) return null

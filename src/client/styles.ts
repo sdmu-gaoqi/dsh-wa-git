@@ -269,6 +269,11 @@ export const CSS = `
 .dshg-confirm{width:min(380px,calc(100vw - 32px));padding:16px;border-radius:12px;${SURFACE_CSS};isolation:isolate;border:.5px solid var(--dsw-alias-border-l2);box-shadow:0 20px 50px -12px rgba(0,0,0,.55)}
 .dshg-confirm-title{font-size:13px;font-weight:600;margin-bottom:8px}
 .dshg-confirm-body{font-size:12px;line-height:1.65;color:var(--dsw-alias-label-secondary);word-break:break-word}
+.dshg-confirm-fields{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.dshg-confirm-field{display:flex;flex-direction:column;gap:4px}
+.dshg-confirm-field > span{font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.dshg-confirm-field .dshg-input{margin:0;height:30px}
+.dshg-confirm-ok{padding:0 14px;flex:none}
 .dshg-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .dshg-ghost{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
 .dshg-ghost:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
