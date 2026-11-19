@@ -7,9 +7,10 @@
  * raised because `git log --all` on a large repo is routinely multi-megabyte.
  */
 import { execFile } from 'node:child_process'
-import { readFile, realpath } from 'node:fs/promises'
-import { isAbsolute, join, resolve } from 'node:path'
+import { readFile, readdir, realpath, stat } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve, extname } from 'node:path'
 import { promisify } from 'node:util'
+import { openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 
 /** Promisified `execFile`: (file, args, options) → { stdout, stderr }. */
 const run = promisify(execFile)
@@ -1202,4 +1203,197 @@ export async function resolveConflict(
     .map((line) => line.trim())
     .filter((line) => line !== '')
   return remaining
+}
+
+/* -------------------------------------------------------------- file browser */
+
+export interface FileEntry {
+  /** Absolute path. */
+  path: string
+  /** Path relative to the repo root, forward slashes. */
+  rel: string
+  name: string
+  kind: 'dir' | 'file' | 'symlink'
+  size: number
+  mtime: number
+}
+
+/**
+ * List one directory of the repository.
+ *
+ * `rel` is validated to stay INSIDE the repo root so a crafted value cannot
+ * browse arbitrary folders on disk. Heavy directories are still listed (the
+ * user can choose to enter them), they are just not expanded automatically.
+ */
+export async function listFiles(cwd: string, rel = ''): Promise<{ dir: string; entries: FileEntry[] }> {
+  const root = await realpath(cwd)
+  const target = rel === '' ? root : resolve(root, rel)
+  const real = await realpath(target).catch(() => {
+    throw new GitError('目录不存在', 404)
+  })
+  const relReal = relative(root, real)
+  if (relReal.startsWith('..') || isAbsolute(relReal)) {
+    throw new GitError('不能浏览仓库之外的目录', 403)
+  }
+
+  const dirents = await readdir(real, { withFileTypes: true })
+  const entries: FileEntry[] = []
+  for (const dirent of dirents) {
+    const full = join(real, dirent.name)
+    try {
+      const info = await stat(full)
+      const kind: FileEntry['kind'] = dirent.isDirectory()
+        ? 'dir'
+        : dirent.isSymbolicLink()
+          ? 'symlink'
+          : 'file'
+      entries.push({
+        path: full,
+        rel: relative(root, full).split('\\').join('/'),
+        name: dirent.name,
+        kind,
+        size: info.size,
+        mtime: Math.floor(info.mtimeMs / 1000),
+      })
+    } catch {
+      // Broken symlink / vanished file: skip it rather than failing the listing.
+    }
+  }
+  entries.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
+    return a.name.localeCompare(b.name, 'zh-CN')
+  })
+  return { dir: relReal.split('\\').join('/'), entries }
+}
+
+/**
+ * Open a path with the OS.
+ *
+ * Delegate to DSH's own `dsh-native-command`: on Windows it hands the path to
+ * Explorer so the shell's default-application association decides, which is
+ * what a double-click does. A raw `spawn('explorer.exe', …)` from the plugin
+ * process gets lost in the harness's sandboxed process tree — that version
+ * silently did nothing.
+ */
+export async function openInFileManager(cwd: string, target: string, reveal = false): Promise<void> {
+  const abs = isAbsolute(target) ? target : resolve(cwd, target)
+  const signal = new AbortController().signal
+  if (reveal) await revealNativePath(abs, signal)
+  else await openNativePath(abs, signal)
+}
+
+/* ------------------------------------------------------------ file content */
+
+export interface FileContent {
+  path: string
+  /** Image MIME type; set only when the file is a viewable image. */
+  mime: string | null
+  /** base64 payload for images. */
+  base64: string
+  /** Text payload for non-images (null when binary / too large). */
+  text: string | null
+  binary: boolean
+  tooLarge: boolean
+  size: number
+}
+
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+}
+
+const MAX_TEXT_BYTES = 2 * 1024 * 1024
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+/**
+ * Read a file for in-plugin preview.
+ *
+ * Paths are relative to the repo root and validated to stay inside it. Images
+ * come back as base64 with their MIME so the client can render an <img>; text
+ * comes back verbatim; unknown binary / oversized files are flagged instead of
+ * being decoded into garbage.
+ */
+export async function readFileContent(cwd: string, rel: string): Promise<FileContent> {
+  const target = rel.trim()
+  if (target === '') throw new GitError('缺少文件路径', 400)
+  if (isAbsolute(target) || /^[A-Za-z]:/.test(target) || target.split(/[\\/]/).includes('..')) {
+    throw new GitError('路径必须是仓库内的相对路径', 400)
+  }
+  const root = await realpath(cwd)
+  const full = await realpath(resolve(root, target)).catch(() => {
+    throw new GitError('文件不存在', 404)
+  })
+  const within = relative(root, full)
+  if (within.startsWith('..') || isAbsolute(within)) throw new GitError('不能读取仓库之外的文件', 403)
+
+  const info = await stat(full)
+  const size = info.size
+  const ext = extname(full).toLowerCase()
+  const mime = IMAGE_TYPES[ext] ?? null
+  if (mime !== null) {
+    if (size > MAX_IMAGE_BYTES) {
+      return { path: within, mime, base64: '', text: null, binary: true, tooLarge: true, size }
+    }
+    const buf = await readFile(full)
+    return { path: within, mime, base64: buf.toString('base64'), text: null, binary: false, tooLarge: false, size }
+  }
+
+  if (size > MAX_TEXT_BYTES) {
+    return { path: within, mime: null, base64: '', text: null, binary: false, tooLarge: true, size }
+  }
+  const buf = await readFile(full)
+  // Binary sniff: a NUL byte anywhere in the first 8 KiB means it is not text.
+  const probe = buf.subarray(0, Math.min(buf.length, 8192))
+  if (probe.includes(0)) {
+    return { path: within, mime: null, base64: '', text: null, binary: true, tooLarge: false, size }
+  }
+  return { path: within, mime: null, base64: '', text: buf.toString('utf8'), binary: false, tooLarge: false, size }
+}
+
+/** Commits that touched one path (used by "显示 Git 历史" on a file). */
+export async function fileHistory(cwd: string, rel: string, limit = 60): Promise<CommitNode[]> {
+  const target = rel.trim()
+  if (target === '') throw new GitError('缺少文件路径', 400)
+  if (target.startsWith('/') || /^[A-Za-z]:/.test(target) || target.includes('..')) {
+    throw new GitError('路径必须是仓库内的相对路径', 400)
+  }
+  const format = '%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e'
+  let raw: string
+  try {
+    raw = await gitOrThrow(cwd, [
+      'log',
+      '--date-order',
+      '--max-count',
+      String(Math.min(Math.max(limit, 1), 200)),
+      `--pretty=format:${format}`,
+      '--',
+      target,
+    ])
+  } catch {
+    return []
+  }
+  const nodes: CommitNode[] = []
+  for (const chunk of raw.split('\x1e')) {
+    const record = chunk.replace(/^\n+/, '')
+    if (record === '') continue
+    const [sha, parents, author, email, time, refs, subject] = record.split('\x1f')
+    if (!sha) continue
+    nodes.push({
+      sha,
+      short: sha.slice(0, 7),
+      parents: (parents ?? '').split(' ').filter(Boolean),
+      author: author ?? '',
+      email: email ?? '',
+      time: Number(time) || 0,
+      refs: parseDecorations(refs ?? ''),
+      subject: subject ?? '',
+    })
+  }
+  return nodes
 }

@@ -31,6 +31,7 @@ import type { GraphRow } from './graph'
 import { DiffBody, DiffBodySplit } from './parts/DiffBody'
 import { ConflictPanel } from './parts/ConflictPanel'
 import { ConfirmDialog } from './parts/ConfirmDialog'
+import { FileBrowser } from './parts/FileBrowser'
 import { Menu } from './parts/Menu'
 import type { MenuItem } from './parts/Menu'
 import { Terminal } from './parts/Terminal'
@@ -40,7 +41,7 @@ const AUTO_REFRESH_MS = 20_000
 const LANE_W = 14
 const ROW_H = 26
 
-type Tab = 'changes' | 'graph' | 'terminal'
+type Tab = 'changes' | 'graph' | 'terminal' | 'files'
 
 /* ------------------------------------------------------------------ styles */
 
@@ -733,6 +734,10 @@ function Popup(props: PopupProps): React.ReactElement {
   const [diffSplit, setDiffSplit] = React.useState(true)
   /** A conflicted file being resolved; takes over the side panel. */
   const [conflictFile, setConflictFile] = React.useState('')
+  /** Set when "显示 Git 历史" is chosen on a file; the graph tab filters to it. */
+  const [historyPath, setHistoryPath] = React.useState('')
+  /** Commits for the file-history filter. */
+  const [historyCommits, setHistoryCommits] = React.useState<CommitNode[] | null>(null)
   const messageRef = React.useRef<HTMLTextAreaElement | null>(null)
 
   const stagedCount = state?.staged.length ?? 0
@@ -757,6 +762,8 @@ function Popup(props: PopupProps): React.ReactElement {
     setCommitSha('')
     setCompareOpen(false)
     setConflictFile('')
+    setHistoryPath('')
+    setHistoryCommits(null)
     setTab('changes')
   }, [cwd])
 
@@ -1224,6 +1231,35 @@ function Popup(props: PopupProps): React.ReactElement {
     }
   }, [cwd, selected])
 
+  /* ---- file-history loader (from the file browser's context menu) ---- */
+  React.useEffect(() => {
+    if (historyPath === '') {
+      setHistoryCommits(null)
+      return undefined
+    }
+    let alive = true
+    api
+      .fileHistory(cwd, historyPath)
+      .then((result) => {
+        if (alive) setHistoryCommits(result.commits)
+      })
+      .catch(() => {
+        if (alive) setHistoryCommits([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [cwd, historyPath])
+
+  const showFileHistory = (rel: string): void => {
+    setHistoryPath(rel)
+    setHistoryCommits(null)
+    setCommitSha('')
+    setCompareOpen(false)
+    setConflictFile('')
+    setTab('graph')
+  }
+
   /* ---- commit detail loader ---- */
   React.useEffect(() => {
     if (commitSha === '') {
@@ -1245,10 +1281,11 @@ function Popup(props: PopupProps): React.ReactElement {
   }, [cwd, commitSha])
 
   /* ---- graph ---- */
-  const graphRows = state === null ? [] : layoutGraph(state.commits)
+  const graphCommits = historyPath !== '' && historyCommits !== null ? historyCommits : (state?.commits ?? [])
+  const graphRows = layoutGraph(graphCommits)
   const laneTotal = graphRows.reduce((max, row) => Math.max(max, row.laneCount), 1)
   const commitBySha = new Map<string, CommitNode>()
-  if (state !== null) for (const commit of state.commits) commitBySha.set(commit.sha, commit)
+  for (const commit of graphCommits) commitBySha.set(commit.sha, commit)
 
   const clickCommit = (commit: CommitNode): void => {
     setCommitSha((prev) => (prev === commit.sha ? '' : commit.sha))
@@ -1258,8 +1295,15 @@ function Popup(props: PopupProps): React.ReactElement {
   const position = (): React.CSSProperties => {
     // A side panel needs room for the list + a two-column diff. Prefer using
     // most of the viewport instead of squeezing everything into 860px.
-    const needsSide = compareOpen || (tab === 'graph' && commitSha !== '') || (tab === 'changes' && selected !== null)
-    const preferred = needsSide ? Math.max(1080, Math.round(window.innerWidth * 0.9)) : 480
+    const needsSide =
+      compareOpen ||
+      (tab === 'graph' && commitSha !== '') ||
+      (tab === 'changes' && selected !== null) ||
+      conflictFile !== ''
+    // The file tab is a browser + preview split; keep it wide even before a file
+    // is previewed so the list does not start cramped.
+    const isFiles = tab === 'files'
+    const preferred = needsSide || isFiles ? Math.max(1080, Math.round(window.innerWidth * 0.9)) : 480
     const width = Math.min(preferred, Math.max(320, window.innerWidth - 24))
     if (anchor === null || typeof window === 'undefined') return { top: 64, right: 16, width }
     const right = Math.max(12, Math.min(window.innerWidth - width - 12, window.innerWidth - anchor.right))
@@ -1303,6 +1347,14 @@ function Popup(props: PopupProps): React.ReactElement {
 
   const bodyForTab = (): React.ReactNode => {
     if (tab === 'terminal') return React.createElement(Terminal, { cwd, active: tab === 'terminal' })
+    if (tab === 'files') {
+      return React.createElement(FileBrowser, {
+        cwd,
+        active: tab === 'files',
+        onHistory: showFileHistory,
+        onNotice: notify,
+      })
+    }
     if (repo.loading && state === null) return React.createElement('div', { className: 'dshg-loading' }, '正在读取仓库…')
 
     if (tab === 'changes') {
@@ -1488,12 +1540,29 @@ function Popup(props: PopupProps): React.ReactElement {
       React.createElement(
         'div',
         { className: 'dshg-sechead dshg-static' },
-        React.createElement('span', { className: 'dshg-sectitle' }, '图表'),
-        React.createElement('span', { className: 'dshg-count' }, state.commits.length),
+        React.createElement('span', { className: 'dshg-sectitle' }, historyPath !== '' ? '文件历史' : '图表'),
+        React.createElement('span', { className: 'dshg-count' }, graphCommits.length),
         React.createElement('span', { className: 'dshg-secactions' },
-          React.createElement('span', { className: 'dshg-gsha' }, state.repo.branch),
+          historyPath !== ''
+            ? React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-mini',
+                  title: `清除筛选：${historyPath}`,
+                  onClick: () => {
+                    setHistoryPath('')
+                    setHistoryCommits(null)
+                  },
+                },
+                React.createElement(Icon, { name: 'close' }),
+              )
+            : React.createElement('span', { className: 'dshg-gsha' }, state.repo.branch),
         ),
       ),
+      historyPath !== ''
+        ? React.createElement('div', { className: 'dshg-history-path', title: historyPath }, historyPath)
+        : null,
       ...graphRows.map((row) => {
         const commit = commitBySha.get(row.sha)
         if (commit === undefined) return null
@@ -1699,6 +1768,7 @@ function Popup(props: PopupProps): React.ReactElement {
         { className: 'dshg-tabs', role: 'tablist' },
         tabButton('changes', '更改', state === null ? undefined : state.staged.length + state.changes.length + state.untracked.length),
         tabButton('graph', '图表', state === null ? undefined : state.commits.length),
+        tabButton('files', '文件浏览'),
         tabButton('terminal', '终端'),
       ),
 

@@ -43,7 +43,11 @@ import {
   deleteBranch,
   diff,
   discard,
+  fileHistory,
   graph,
+  listFiles,
+  readFileContent,
+  openInFileManager,
   remotes,
   removeRemote,
   resolveConflict,
@@ -89,6 +93,7 @@ interface Body {
   create?: unknown
   setUpstream?: unknown
   command?: unknown
+  reveal?: unknown
 }
 
 const COMMIT_ACTIONS = new Set<CommitAction>(['revert', 'reset-soft', 'reset-mixed', 'reset-hard', 'rebase'])
@@ -303,6 +308,56 @@ export function apply(ctx: HostContext) {
           }
           const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
           sendJson(res, 200, { ok: true, ...(await compare(cwd, Number(url.searchParams.get('limit') ?? 40))) })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/files`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          sendJson(res, 200, { ok: true, ...(await listFiles(cwd, url.searchParams.get('dir') ?? '')) })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/file-content`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const content = await readFileContent(cwd, url.searchParams.get('path') ?? '')
+          sendJson(res, 200, { ok: true, ...content })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/file-history`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const commits = await fileHistory(cwd, url.searchParams.get('path') ?? '')
+          sendJson(res, 200, { ok: true, commits })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/open-path`) {
+          if (req.method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const bodyOpen = await readBody(req)
+          const cwd = await resolveRepoDir(typeof bodyOpen.cwd === 'string' ? bodyOpen.cwd : fallbackCwd)
+          const target = requiredString(bodyOpen.target, 'target')
+          try {
+            await openInFileManager(cwd, target, bodyOpen.reveal === true)
+            sendJson(res, 200, { ok: true })
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            throw new GitError(`无法打开：${detail}`, 500, detail)
+          }
           return
         }
 

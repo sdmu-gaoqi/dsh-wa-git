@@ -309,6 +309,75 @@ async function testHost() {
   assert.notEqual(path.resolve(terminalCd.json.cwd), path.resolve(dir), 'cwd moved for the next call')
   ok('终端 cd 改变后续命令的工作目录')
 
+  /* ---- file browser ---- */
+
+  fs.mkdirSync(path.join(dir, 'sub', 'deep'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'sub', 'note.txt'), 'note\n')
+
+  const rootFiles = await callRoute(route.handler, { url: `/wagq-git/api/files?cwd=${encoded}&dir=` })
+  assert.equal(rootFiles.status, 200, rootFiles.text)
+  assert.ok(rootFiles.json.entries.some((e) => e.name === 'sub' && e.kind === 'dir'))
+  assert.ok(rootFiles.json.entries.some((e) => e.name === 'README.md' && e.kind === 'file'))
+  ok('GET /api/files 列出仓库根目录')
+
+  const subFiles = await callRoute(route.handler, { url: `/wagq-git/api/files?cwd=${encoded}&dir=sub` })
+  assert.equal(subFiles.status, 200, subFiles.text)
+  assert.ok(subFiles.json.entries.some((e) => e.name === 'note.txt'))
+  assert.equal(subFiles.json.dir, 'sub')
+  ok('GET /api/files 进入子目录')
+
+  const escapeFiles = await callRoute(route.handler, { url: `/wagq-git/api/files?cwd=${encoded}&dir=..%2F..` })
+  assert.equal(escapeFiles.status, 403, escapeFiles.text)
+  ok('浏览仓库之外的目录 → 403')
+
+  const noSuchDir = await callRoute(route.handler, { url: `/wagq-git/api/files?cwd=${encoded}&dir=nope` })
+  assert.equal(noSuchDir.status, 404, noSuchDir.text)
+  ok('不存在的目录 → 404')
+
+  const fileLog = await callRoute(route.handler, { url: `/wagq-git/api/file-history?cwd=${encoded}&path=README.md` })
+  assert.equal(fileLog.status, 200, fileLog.text)
+  assert.ok(fileLog.json.commits.length >= 1, 'README.md has commits')
+  ok('GET /api/file-history 返回单文件提交历史')
+
+  const badPath = await callRoute(route.handler, { url: `/wagq-git/api/file-history?cwd=${encoded}&path=..%2Fetc` })
+  assert.equal(badPath.status, 400)
+  ok('逃逸路径的 file-history → 400')
+
+  const textContent = await callRoute(route.handler, {
+    url: `/wagq-git/api/file-content?cwd=${encoded}&path=${encodeURIComponent('README.md')}`,
+  })
+  assert.equal(textContent.status, 200, textContent.text)
+  assert.equal(textContent.json.mime, null)
+  assert.match(textContent.json.text, /# smoke/)
+  ok('GET /api/file-content 返回文本文件')
+
+  // A tiny PNG (1x1) must come back as base64 with its MIME.
+  const pngPath = path.join(dir, 'pixel.png')
+  fs.writeFileSync(pngPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
+  const imageContent = await callRoute(route.handler, {
+    url: `/wagq-git/api/file-content?cwd=${encoded}&path=pixel.png`,
+  })
+  assert.equal(imageContent.status, 200, imageContent.text)
+  assert.equal(imageContent.json.mime, 'image/png')
+  assert.equal(imageContent.json.base64.length > 0, true)
+  assert.equal(imageContent.json.text, null)
+  ok('GET /api/file-content 返回图片的 base64 + MIME')
+
+  const escapeContent = await callRoute(route.handler, {
+    url: `/wagq-git/api/file-content?cwd=${encoded}&path=..%2F..%2Fetc`,
+  })
+  assert.equal(escapeContent.status, 400)
+  ok('逃逸路径的 file-content → 400')
+  fs.unlinkSync(pngPath)
+
+  const openBad = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/open-path',
+    body: { cwd: dir, target: '' },
+  })
+  assert.equal(openBad.status, 400)
+  ok('POST /api/open-path 缺少 target → 400（不真的弹窗口）')
+
   const syncResult = await callRoute(route.handler, {
     method: 'POST',
     url: '/wagq-git/api/sync',

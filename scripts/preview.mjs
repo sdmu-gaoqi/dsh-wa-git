@@ -84,6 +84,14 @@ if (data.state) {
     branches: () => Promise.resolve(data.branches),
     remotes: () => Promise.resolve(data.remotes),
     compare: () => Promise.resolve(data.compare),
+    files: (cwd_, dir) => Promise.resolve(
+      data.files[dir] ?? { ok: true, dir, entries: [] },
+    ),
+    fileHistory: () => Promise.resolve(data.fileHistory),
+    fileContent: (cwd_, p) => Promise.resolve(
+      data.fileContent[p] ?? { ok: true, path: p, mime: null, base64: '', text: '（预览数据未生成）' + p, binary: false, tooLarge: false, size: 0 },
+    ),
+    openPath: () => Promise.resolve({ ok: true }),
     commitDetail: (cwd_, sha) => Promise.resolve(
       data.commits[sha] ?? { ok: true, commit: data.commits[Object.keys(data.commits)[0]] },
     ),
@@ -151,6 +159,9 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     commits[commit.sha] = { ok: true, commit: commitFixture(target, commit.sha) }
   }
   const terminal = terminalFixture(target)
+  const files = fileFixture(target)
+  const fileHistory = { ok: true, commits: state.commits.slice(0, 3) }
+  const fileContent = fileContentFixture(target)
   // Compare fixture: pretend HEAD is 2 ahead and 1 behind, which is the shape the
   // panel is designed around (both columns non-empty).
   const compare = {
@@ -213,6 +224,9 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     compare,
     commits,
     terminal,
+    files,
+    fileHistory,
+    fileContent,
     message: { ok: true, message: 'chore: 更新 2 个文件' },
   }).replace(/</g, '\\u003c')};</script>
 <script src="${path.basename(outfile)}"></script>
@@ -245,6 +259,10 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     remotes: 'scm-popup-remotes.png',
     'branch-menu': 'scm-popup-branch-menu.png',
     'add-remote': 'scm-popup-add-remote.png',
+    files: 'scm-popup-files.png',
+    'file-menu': 'scm-popup-file-menu.png',
+    'file-text': 'scm-popup-file-text.png',
+    'file-image': 'scm-popup-file-image.png',
   }
   const file = shots[scene] ?? shots.changes
 
@@ -282,6 +300,37 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     await page.waitForTimeout(300)
     await page.getByRole('menuitem', { name: /添加远端/ }).click()
     await page.waitForTimeout(300)
+  } else if (scene === 'file-image') {
+    // Pick the first available PNG from the injected content fixture by driving
+    // the file list to a synthetic "preview" folder.
+    await page.evaluate(() => {
+      const data = window.__WAGQ_GIT_DATA__
+      const key = Object.keys(data.fileContent).find((k) => /\.png$/i.test(k))
+      if (key) {
+        const parts = key.split('/')
+        data.files[''] = { ok: true, dir: '', entries: [{ path: key, rel: key, name: parts[parts.length - 1], kind: 'file', size: data.fileContent[key].size, mtime: 0 }] }
+      }
+    })
+    await page.getByRole('tab', { name: /文件浏览/ }).click()
+    await page.waitForTimeout(300)
+    // Refresh so the injected file list is picked up after mount.
+    await page.locator('.dshg-files-bar button[title="刷新"]').click()
+    await page.waitForTimeout(400)
+    await page.locator('.dshg-filerow').filter({ hasText: /\.png/ }).first().click()
+    await page.waitForTimeout(700)
+  } else if (scene === 'file-text') {
+    await page.getByRole('tab', { name: /文件浏览/ }).click()
+    await page.waitForTimeout(400)
+    await page.locator('.dshg-filerow').filter({ hasText: 'README.md' }).first().click()
+    await page.waitForTimeout(450)
+  } else if (scene === 'files') {
+    await page.getByRole('tab', { name: /文件浏览/ }).click()
+    await page.waitForTimeout(450)
+  } else if (scene === 'file-menu') {
+    await page.getByRole('tab', { name: /文件浏览/ }).click()
+    await page.waitForTimeout(450)
+    await page.locator('.dshg-filerow').first().click({ button: 'right' })
+    await page.waitForTimeout(250)
   } else if (scene === 'branch-menu') {
     await page.locator('.dshg-branch-btn').click()
     await page.waitForTimeout(250)
@@ -332,6 +381,11 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
           const r = node.getBoundingClientRect()
           return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
         })(),
+        filePreview: document.querySelector('.dshg-filepreview') !== null,
+        fileList: pick('.dshg-files-wrap > .dshg-files'),
+        fileSplit: pick('.dshg-files-split'),
+        imagePreviews: document.querySelectorAll('.dshg-file-image img').length,
+        menuItems: [...document.querySelectorAll('.dshg-menu-item')].map((n) => n.textContent.trim()).slice(0, 12),
         branchPicker: document.querySelector('.dshg-branchpicker') !== null,
       }
     })
@@ -412,6 +466,84 @@ function commitFixture(cwd, sha) {
     removed,
     tooLarge: false,
   }
+}
+
+function fileContentFixture(target) {
+  const out = {}
+  const add = (rel) => {
+    try {
+      const full = path.join(target, rel)
+      const st = fs.statSync(full)
+      if (st.size > 2 * 1024 * 1024) return
+      const ext = path.extname(rel).toLowerCase()
+      if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico'].includes(ext)) {
+        const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' }[ext]
+        out[rel] = { ok: true, path: rel, mime, base64: fs.readFileSync(full).toString('base64'), text: null, binary: false, tooLarge: false, size: st.size }
+      } else {
+        const buf = fs.readFileSync(full)
+        if (buf.includes(0)) return
+        out[rel] = { ok: true, path: rel, mime: null, base64: '', text: buf.toString('utf8'), binary: false, tooLarge: false, size: st.size }
+      }
+    } catch {
+      // skip
+    }
+  }
+  try {
+    for (const name of fs.readdirSync(target)) {
+      const full = path.join(target, name)
+      if (!fs.statSync(full).isFile()) continue
+      add(name)
+    }
+    // Include one level of the preview folder so image rendering can be tested.
+    const previewDir = path.join(target, 'preview')
+    if (fs.existsSync(previewDir)) {
+      for (const name of fs.readdirSync(previewDir)) {
+        const full = path.join(previewDir, name)
+        if (fs.statSync(full).isFile() && /\.(png|jpe?g|gif|webp)$/i.test(name)) add(`preview/${name}`)
+      }
+    }
+  } catch {
+    // skip
+  }
+  return out
+}
+
+function fileFixture(target) {
+  const listDir = (dir, rel) => {
+    const entries = []
+    for (const name of fs.readdirSync(dir)) {
+      if (['.git', 'node_modules'].includes(name)) continue
+      const full = path.join(dir, name)
+      let st
+      try {
+        st = fs.statSync(full)
+      } catch {
+        continue
+      }
+      entries.push({
+        path: full,
+        rel: rel === '' ? name : `${rel}/${name}`,
+        name,
+        kind: st.isDirectory() ? 'dir' : 'file',
+        size: st.size,
+        mtime: Math.floor(st.mtimeMs / 1000),
+      })
+    }
+    entries.sort((a, b) => (a.kind !== b.kind ? (a.kind === 'dir' ? -1 : 1) : a.name.localeCompare(b.name)))
+    return { ok: true, dir: rel, entries }
+  }
+  const root = listDir(target, '')
+  const out = { '': root }
+  for (const entry of root.entries) {
+    if (entry.kind === 'dir') {
+      try {
+        out[entry.rel] = listDir(path.join(target, entry.rel), entry.rel)
+      } catch {
+        // unreadable directory
+      }
+    }
+  }
+  return out
 }
 
 function terminalFixture(cwd) {

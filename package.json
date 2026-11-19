@@ -49,5 +49,8 @@
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-native-command": "0.2.2-rc.1"
   }
 }

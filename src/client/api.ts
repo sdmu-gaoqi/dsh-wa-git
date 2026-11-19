@@ -172,6 +172,32 @@ export interface ConflictFile {
   worktree: string
 }
 
+export interface FileEntry {
+  path: string
+  rel: string
+  name: string
+  kind: 'dir' | 'file' | 'symlink'
+  size: number
+  mtime: number
+}
+
+export interface FileList {
+  ok: true
+  dir: string
+  entries: FileEntry[]
+}
+
+export interface FileContent {
+  ok: true
+  path: string
+  mime: string | null
+  base64: string
+  text: string | null
+  binary: boolean
+  tooLarge: boolean
+  size: number
+}
+
 export class ApiError extends Error {
   status: number
   detail: string
@@ -254,6 +280,18 @@ export const api = {
   },
   resolveConflict(cwd: string, paths: string[], side: 'ours' | 'theirs'): Promise<{ ok: true; remaining: string[] }> {
     return post('resolve-conflict', { cwd, paths, side })
+  },
+  files(cwd: string, dir: string): Promise<FileList> {
+    return get('files', { cwd, dir })
+  },
+  fileContent(cwd: string, path: string): Promise<FileContent> {
+    return get('file-content', { cwd, path })
+  },
+  fileHistory(cwd: string, path: string): Promise<{ ok: true; commits: CommitNode[] }> {
+    return get('file-history', { cwd, path })
+  },
+  openPath(cwd: string, target: string, reveal = false): Promise<{ ok: true }> {
+    return post('open-path', { cwd, target, reveal })
   },
   stage(cwd: string, paths: string[]): Promise<{ ok: true }> {
     return post('stage', { cwd, paths })
