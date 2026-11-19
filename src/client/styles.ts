@@ -121,7 +121,9 @@ export const CSS = `
 .dshg-root[data-side=true] .dshg-body{flex:1 1 auto;min-height:180px}
 /* Direct children of .dshg-body are the columns; each must be able to scroll. */
 .dshg-body > *{min-width:0;min-height:0}
-.dshg-list{flex:0 0 clamp(200px,26%,300px);min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.dshg-list{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+/* Only constrain the list when a diff / detail panel actually shares the row. */
+.dshg-root[data-side=true] .dshg-list{flex:0 0 clamp(200px,26%,300px)}
 .dshg-list::-webkit-scrollbar{width:10px}
 .dshg-list::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l1);border-radius:5px;border:2px solid transparent;background-clip:content-box}
 .dshg-list::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-scrollbar-hover-l1);background-clip:content-box}

@@ -146,8 +146,8 @@ var api = {
   discard(cwd, paths) {
     return post("discard", { cwd, paths });
   },
-  commit(cwd, message, amend) {
-    return post("commit", { cwd, message, amend });
+  commit(cwd, message, amend, signoff = false) {
+    return post("commit", { cwd, message, amend, signoff });
   },
   sync(cwd, action, options = {}) {
     return post("sync", { cwd, action, ...options });
@@ -296,7 +296,9 @@ var CSS = `
 .dshg-root[data-side=true] .dshg-body{flex:1 1 auto;min-height:180px}
 /* Direct children of .dshg-body are the columns; each must be able to scroll. */
 .dshg-body > *{min-width:0;min-height:0}
-.dshg-list{flex:0 0 clamp(200px,26%,300px);min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.dshg-list{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+/* Only constrain the list when a diff / detail panel actually shares the row. */
+.dshg-root[data-side=true] .dshg-list{flex:0 0 clamp(200px,26%,300px)}
 .dshg-list::-webkit-scrollbar{width:10px}
 .dshg-list::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l1);border-radius:5px;border:2px solid transparent;background-clip:content-box}
 .dshg-list::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-scrollbar-hover-l1);background-clip:content-box}
@@ -2096,6 +2098,7 @@ function Popup(props) {
   const [tab, setTab] = React7.useState("changes");
   const [message, setMessage] = React7.useState("");
   const [amend, setAmend] = React7.useState(false);
+  const [signoff, setSignoff] = React7.useState(false);
   const [busy, setBusy] = React7.useState("");
   const [notice, setNotice] = React7.useState("");
   const [failure, setFailure] = React7.useState("");
@@ -2178,9 +2181,10 @@ function Popup(props) {
       return;
     }
     run("commit", async () => {
-      const result = await api.commit(cwd, message.trim(), amend);
+      const result = await api.commit(cwd, message.trim(), amend, signoff);
       setMessage("");
       setAmend(false);
+      setSignoff(false);
       notify(`\u5DF2\u63D0\u4EA4 ${result.short}${result.branch === "" ? "" : ` \xB7 ${result.branch}`}`);
     });
   };
@@ -3057,9 +3061,26 @@ ${commit.subject}`,
             {
               type: "button",
               className: "dshg-split-arrow",
-              title: amend ? "\u8FD9\u6B21\u63D0\u4EA4\u5C06\u8986\u76D6\u4E0A\u4E00\u6B21\u63D0\u4EA4" : "\u66F4\u591A\u63D0\u4EA4\u9009\u9879",
+              title: "\u66F4\u591A\u63D0\u4EA4\u9009\u9879",
               disabled: busy !== "",
-              onClick: () => setAmend((prev) => !prev)
+              onClick: (event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                showMenu([
+                  { id: "h", label: "\u63D0\u4EA4\u9009\u9879", heading: true },
+                  {
+                    id: "amend",
+                    label: "\u4FEE\u6539\u4E0A\u6B21\u63D0\u4EA4\uFF08amend\uFF09",
+                    hint: amend ? "\u2713" : void 0,
+                    onSelect: () => setAmend((prev) => !prev)
+                  },
+                  {
+                    id: "signoff",
+                    label: "\u6DFB\u52A0 Signed-off-by",
+                    hint: signoff ? "\u2713" : void 0,
+                    onSelect: () => setSignoff((prev) => !prev)
+                  }
+                ], { x: rect.right - 214, y: rect.bottom + 4 });
+              }
             },
             React7.createElement(Icon4, { name: "chevron" })
           )
@@ -3091,6 +3112,7 @@ ${commit.subject}`,
             busy === "generate" ? "\u751F\u6210\u4E2D\u2026" : "\u751F\u6210\u63D0\u4EA4\u6D88\u606F"
           ),
           React7.createElement("span", { className: "dshg-spacer" }),
+          signoff ? React7.createElement("span", { className: "dshg-rowstat", title: "\u63D0\u4EA4\u4F1A\u9644\u5E26 Signed-off-by" }, "\u2713 signoff") : null,
           notice !== "" ? React7.createElement("span", { className: "dshg-rowstat dshg-add" }, notice) : stagedCount > 0 ? React7.createElement("span", { className: "dshg-rowstat" }, `${stagedCount} \u4E2A\u6587\u4EF6\u5DF2\u6682\u5B58`) : null
         )
       ) : null,

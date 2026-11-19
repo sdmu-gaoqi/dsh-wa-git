@@ -263,6 +263,7 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     'file-menu': 'scm-popup-file-menu.png',
     'file-text': 'scm-popup-file-text.png',
     'file-image': 'scm-popup-file-image.png',
+    'commit-menu': 'scm-popup-commit-menu.png',
   }
   const file = shots[scene] ?? shots.changes
 

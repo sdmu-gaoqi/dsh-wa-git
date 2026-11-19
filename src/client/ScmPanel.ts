@@ -693,6 +693,7 @@ function Popup(props: PopupProps): React.ReactElement {
   const [tab, setTab] = React.useState<Tab>('changes')
   const [message, setMessage] = React.useState('')
   const [amend, setAmend] = React.useState(false)
+  const [signoff, setSignoff] = React.useState(false)
   const [busy, setBusy] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const [failure, setFailure] = React.useState('')
@@ -803,9 +804,10 @@ function Popup(props: PopupProps): React.ReactElement {
       return
     }
     run('commit', async () => {
-      const result = await api.commit(cwd, message.trim(), amend)
+      const result = await api.commit(cwd, message.trim(), amend, signoff)
       setMessage('')
       setAmend(false)
+      setSignoff(false)
       notify(`已提交 ${result.short}${result.branch === '' ? '' : ` · ${result.branch}`}`)
     })
   }
@@ -1811,9 +1813,26 @@ function Popup(props: PopupProps): React.ReactElement {
                 {
                   type: 'button',
                   className: 'dshg-split-arrow',
-                  title: amend ? '这次提交将覆盖上一次提交' : '更多提交选项',
+                  title: '更多提交选项',
                   disabled: busy !== '',
-                  onClick: () => setAmend((prev) => !prev),
+                  onClick: (event: React.MouseEvent) => {
+                    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+                    showMenu([
+                      { id: 'h', label: '提交选项', heading: true },
+                      {
+                        id: 'amend',
+                        label: '修改上次提交（amend）',
+                        hint: amend ? '✓' : undefined,
+                        onSelect: () => setAmend((prev) => !prev),
+                      },
+                      {
+                        id: 'signoff',
+                        label: '添加 Signed-off-by',
+                        hint: signoff ? '✓' : undefined,
+                        onSelect: () => setSignoff((prev) => !prev),
+                      },
+                    ], { x: rect.right - 214, y: rect.bottom + 4 })
+                  },
                 },
                 React.createElement(Icon, { name: 'chevron' }),
               ),
@@ -1845,6 +1864,9 @@ function Popup(props: PopupProps): React.ReactElement {
                 busy === 'generate' ? '生成中…' : '生成提交消息',
               ),
               React.createElement('span', { className: 'dshg-spacer' }),
+              signoff
+                ? React.createElement('span', { className: 'dshg-rowstat', title: '提交会附带 Signed-off-by' }, '✓ signoff')
+                : null,
               notice !== ''
                 ? React.createElement('span', { className: 'dshg-rowstat dshg-add' }, notice)
                 : stagedCount > 0

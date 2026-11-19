@@ -302,8 +302,8 @@ export const api = {
   discard(cwd: string, paths: string[]): Promise<{ ok: true }> {
     return post('discard', { cwd, paths })
   },
-  commit(cwd: string, message: string, amend: boolean): Promise<CommitResult> {
-    return post('commit', { cwd, message, amend })
+  commit(cwd: string, message: string, amend: boolean, signoff = false): Promise<CommitResult> {
+    return post('commit', { cwd, message, amend, signoff })
   },
   sync(
     cwd: string,
