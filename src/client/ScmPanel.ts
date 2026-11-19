@@ -698,6 +698,23 @@ function Popup(props: PopupProps): React.ReactElement {
   const [open, setOpen] = React.useState({ staged: true, changes: true, untracked: true })
   const [menu, setMenu] = React.useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [branchPicker, setBranchPicker] = React.useState<{ x: number; y: number } | null>(null)
+  /** Anchor rect of the ⋯ button, reused by every remote submenu so they stay
+   *  next to the button instead of jumping to the middle of the screen. */
+  const menuAnchor = React.useRef<{ x: number; y: number } | null>(null)
+
+  /** Open a menu at the ⋯ button and make sure the branch picker is closed. */
+  const showMenu = (items: MenuItem[], at?: { x: number; y: number }): void => {
+    setBranchPicker(null)
+    const anchor = at ?? menuAnchor.current ?? { x: window.innerWidth - 230, y: 96 }
+    menuAnchor.current = anchor
+    setMenu({ x: anchor.x, y: anchor.y, items })
+  }
+
+  /** Open the branch picker and close the ⋯ menu so the two never overlap. */
+  const showBranchPicker = (at: { x: number; y: number }): void => {
+    setMenu(null)
+    setBranchPicker(at)
+  }
   const [commitSha, setCommitSha] = React.useState('')
   const [detail, setDetail] = React.useState<CommitDetail | null>(null)
   const [confirm, setConfirm] = React.useState<{ title: string; body: string; run: () => void } | null>(null)
@@ -795,10 +812,8 @@ function Popup(props: PopupProps): React.ReactElement {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
     const behind = state?.repo.behind ?? 0
     const ahead = state?.repo.ahead ?? 0
-    setMenu({
-      x: rect.right - 214,
-      y: rect.bottom + 4,
-      items: [
+    menuAnchor.current = { x: rect.right - 214, y: rect.bottom + 4 }
+    showMenu([
         { id: 'h1', label: '同步', heading: true },
         {
           id: 'pull',
@@ -831,7 +846,7 @@ function Popup(props: PopupProps): React.ReactElement {
           id: 'switch',
           label: '切换分支…',
           icon: React.createElement(Icon, { name: 'branch' }),
-          onSelect: () => setBranchPicker({ x: rect.right, y: rect.bottom }),
+          onSelect: () => showBranchPicker({ x: rect.right, y: rect.bottom }),
         },
         {
           id: 'stage',
@@ -848,8 +863,7 @@ function Popup(props: PopupProps): React.ReactElement {
         { id: 'h3', label: '其它', heading: true, separated: true },
         { id: 'terminal', label: '打开 Git 终端', icon: React.createElement(Icon, { name: 'terminal' }), onSelect: () => setTab('terminal') },
         { id: 'refresh', label: '刷新', icon: React.createElement(Icon, { name: 'refresh' }), onSelect: doManualRefresh },
-      ],
-    })
+      ])
   }
 
   const openRemotesMenu = (): void => {
@@ -875,7 +889,7 @@ function Popup(props: PopupProps): React.ReactElement {
           icon: React.createElement(Icon, { name: 'plus' }),
           onSelect: () => addRemoteFlow(),
         })
-        setMenu({ x: Math.max(8, window.innerWidth / 2 - 110), y: 120, items })
+        showMenu(items)
       })
       .catch((err: unknown) => setFailure(err instanceof Error ? err.message : String(err)))
   }
@@ -886,41 +900,37 @@ function Popup(props: PopupProps): React.ReactElement {
   }
 
   const openRemoteEdit = (remote: RemoteInfo): void => {
-    setMenu({
-      x: Math.max(8, window.innerWidth / 2 - 110),
-      y: 120,
-      items: [
-        { id: 'h', label: remote.name, heading: true },
-        {
-          id: 'copy',
-          label: '复制远端地址',
-          onSelect: () => {
-            void copyText(remote.url).then((ok) => notify(ok ? '已复制远端地址' : '复制失败'))
-          },
+    showMenu([
+      { id: 'h', label: remote.name, heading: true },
+      {
+        id: 'copy',
+        label: '复制远端地址',
+        onSelect: () => {
+          void copyText(remote.url).then((ok) => notify(ok ? '已复制远端地址' : '复制失败'))
         },
-        {
-          id: 'url',
-          label: '修改地址…',
-          onSelect: () => {
-            const next = window.prompt(`修改 ${remote.name} 的 URL`, remote.url)
-            if (next === null || next.trim() === '' || next.trim() === remote.url) return
-            run('remote', () => api.setRemoteUrl(cwd, remote.name, next.trim()))
-          },
+      },
+      {
+        id: 'url',
+        label: '修改地址…',
+        onSelect: () => {
+          const next = window.prompt(`修改 ${remote.name} 的 URL`, remote.url)
+          if (next === null || next.trim() === '' || next.trim() === remote.url) return
+          run('remote', () => api.setRemoteUrl(cwd, remote.name, next.trim()))
         },
-        {
-          id: 'remove',
-          label: `删除远端 ${remote.name}`,
-          danger: true,
-          separated: true,
-          onSelect: () =>
-            setConfirm({
-              title: `删除远端 ${remote.name}`,
-              body: '这会移除本地对它的配置，不会影响远端服务器上的仓库。',
-              run: () => run('remote', () => api.removeRemote(cwd, remote.name)),
-            }),
-        },
-      ],
-    })
+      },
+      {
+        id: 'remove',
+        label: `删除远端 ${remote.name}`,
+        danger: true,
+        separated: true,
+        onSelect: () =>
+          setConfirm({
+            title: `删除远端 ${remote.name}`,
+            body: '这会移除本地对它的配置，不会影响远端服务器上的仓库。',
+            run: () => run('remote', () => api.removeRemote(cwd, remote.name)),
+          }),
+      },
+    ])
   }
 
   const addRemoteFlow = (): void => {
@@ -936,11 +946,8 @@ function Popup(props: PopupProps): React.ReactElement {
     event.preventDefault()
     event.stopPropagation()
     const behind = commit.sha !== state?.repo.head
-    setMenu({
-      x: event.clientX,
-      y: event.clientY,
-      items: [
-        { id: 'h', label: `${commit.short} · ${commit.subject.slice(0, 28)}`, heading: true },
+    showMenu([
+      { id: 'h', label: `${commit.short} · ${commit.subject.slice(0, 28)}`, heading: true },
         {
           id: 'copy-sha',
           label: '复制提交哈希',
@@ -1002,8 +1009,7 @@ function Popup(props: PopupProps): React.ReactElement {
                 ),
             }),
         },
-      ],
-    })
+      ], { x: event.clientX, y: event.clientY })
   }
 
   const runReset = (commit: CommitNode, action: CommitAction): void => {
@@ -1592,7 +1598,7 @@ function Popup(props: PopupProps): React.ReactElement {
                 title: `当前分支 ${state.repo.branch}${state.repo.upstream === '' ? '' : `（跟踪 ${state.repo.upstream}）`}\n点击切换分支`,
                 onClick: (event) => {
                   const rect = event.currentTarget.getBoundingClientRect()
-                  setBranchPicker({ x: rect.right, y: rect.bottom })
+                  showBranchPicker({ x: rect.right, y: rect.bottom })
                 },
               },
               React.createElement(Icon, { name: 'branch' }),

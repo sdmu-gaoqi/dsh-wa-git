@@ -242,6 +242,8 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     branches: 'scm-popup-branches.png',
     terminal: 'scm-popup-terminal.png',
     compare: 'scm-popup-compare.png',
+    remotes: 'scm-popup-remotes.png',
+    'branch-menu': 'scm-popup-branch-menu.png',
   }
   const file = shots[scene] ?? shots.changes
 
@@ -267,6 +269,16 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
   } else if (scene === 'branches') {
     await page.locator('.dshg-branch-btn').click()
     await page.waitForTimeout(350)
+  } else if (scene === 'remotes') {
+    await page.locator('button[title="更多操作"]').click()
+    await page.waitForTimeout(200)
+    await page.getByRole('menuitem', { name: /远程管理/ }).click()
+    await page.waitForTimeout(400)
+  } else if (scene === 'branch-menu') {
+    await page.locator('.dshg-branch-btn').click()
+    await page.waitForTimeout(250)
+    await page.locator('button[title="更多操作"]').click()
+    await page.waitForTimeout(250)
   } else if (scene === 'terminal') {
     await page.getByRole('tab', { name: /终端/ }).click()
     await page.waitForTimeout(200)
@@ -288,6 +300,8 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
         const rect = node.getBoundingClientRect()
         const cs = getComputedStyle(node)
         return {
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
           w: Math.round(rect.width),
           h: Math.round(rect.height),
           display: cs.display,
@@ -303,6 +317,13 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
         diff: pick('.dshg-diff'),
         menu: pick('.dshg-menu'),
         confirm: pick('.dshg-confirm'),
+        button: (() => {
+          const node = document.querySelector('button[title="更多操作"]')
+          if (node === null) return null
+          const r = node.getBoundingClientRect()
+          return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
+        })(),
+        branchPicker: document.querySelector('.dshg-branchpicker') !== null,
       }
     })
     console.log('[measure]', JSON.stringify(box, null, 2))
