@@ -154,9 +154,14 @@ export async function repoInfo(cwd: string): Promise<RepoInfo> {
   if (upstream !== '' && !empty) {
     try {
       const counts = (await git(cwd, ['rev-list', '--left-right', '--count', `HEAD...${upstream}`])).stdout.trim()
+      // `rev-list --left-right --count HEAD...upstream` prints:
+      //   <left>  = commits only in HEAD     → ahead
+      //   <right> = commits only in upstream → behind
+      // The two were swapped here, which made "updated from remote" show as
+      // "behind" and pushed commits show as "ahead".
       const [left, right] = counts.split(/\s+/)
-      ahead = Number(right) || 0
-      behind = Number(left) || 0
+      ahead = Number(left) || 0
+      behind = Number(right) || 0
     } catch {
       ahead = 0
       behind = 0

@@ -354,6 +354,13 @@ async function testHost() {
   assert.equal(compareAhead.json.behind.length, 0)
   ok('GET /api/compare 正确列出领先提交')
 
+  // The header badge uses repoInfo().ahead/behind, which used to be swapped:
+  // a locally-ahead branch was displayed as "behind". Assert it agrees with git.
+  const stateAhead = await callRoute(route.handler, { url: `/wagq-git/api/state?cwd=${encoded}` })
+  assert.equal(stateAhead.json.repo.ahead, 1, 'state.ahead counts our own commits')
+  assert.equal(stateAhead.json.repo.behind, 0, 'state.behind counts remote-only commits')
+  ok('GET /api/state 的 ahead/behind 方向与 git 一致')
+
   // A commit pushed from the "remote" side must show up as behind.
   const other = fs.mkdtempSync(path.join(os.tmpdir(), 'wagq-git-other-'))
   execFileSync('git', ['clone', '-q', bareDir, other], { stdio: 'ignore' })
@@ -370,6 +377,11 @@ async function testHost() {
   assert.equal(compareBoth.json.behind.length, 1)
   assert.equal(compareBoth.json.behind[0].subject, 'feat: 远端多出来的提交')
   ok('GET /api/compare 同时列出落后与领先（双向）')
+
+  const stateBoth = await callRoute(route.handler, { url: `/wagq-git/api/state?cwd=${encoded}` })
+  assert.equal(stateBoth.json.repo.ahead, 1, 'state.ahead is our local commit')
+  assert.equal(stateBoth.json.repo.behind, 1, 'state.behind is the remote commit')
+  ok('GET /api/state 双向分叉时 ahead/behind 都正确')
 
   git('reset', '-q', '--hard', 'HEAD')
   fs.rmSync(bareDir, { recursive: true, force: true })
