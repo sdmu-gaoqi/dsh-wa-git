@@ -9,6 +9,8 @@ import type { FileEntry } from '../api'
 import { ICONS } from '../icons'
 import { Menu } from './Menu'
 import type { MenuItem } from './Menu'
+import { DiffBody } from './DiffBody'
+import { highlight, languageOf } from './highlight'
 
 const h = React.createElement
 
@@ -56,6 +58,32 @@ export interface FilePreview {
   isImage: boolean
 }
 
+/** Code viewer: line numbers + lightweight syntax highlighting. */
+function CodeText(props: { text: string; name: string }): React.ReactElement {
+  const lang = languageOf(props.name)
+  const lines = props.text.split('\n')
+  return h(
+    'div',
+    { className: `dshg-file-text dshg-lang-${lang}` },
+    ...lines.map((line, index) =>
+      h(
+        'div',
+        { key: index, className: 'dshg-file-textline' },
+        h('span', { className: 'dshg-snum' }, index + 1),
+        h(
+          'span',
+          { className: 'dshg-code' },
+          ...(line === ''
+            ? [' ']
+            : highlight(line).map((token, i) =>
+                h('span', { key: i, className: token.kind === 'plain' ? undefined : `dshg-tok-${token.kind}` }, token.text),
+              )),
+        ),
+      ),
+    ),
+  )
+}
+
 function FilePreviewPane(props: {
   cwd: string
   file: FilePreview
@@ -66,12 +94,36 @@ function FilePreviewPane(props: {
   const [data, setData] = React.useState<Awaited<ReturnType<typeof api.fileContent>> | null>(null)
   const [error, setError] = React.useState('')
   const [loading, setLoading] = React.useState(true)
+  const [fullscreen, setFullscreen] = React.useState(false)
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState('')
+  const [saving, setSaving] = React.useState(false)
+  const [dirty, setDirty] = React.useState(false)
+  const [showChanges, setShowChanges] = React.useState(false)
+  const [diffPatch, setDiffPatch] = React.useState('')
+  const [diffLoading, setDiffLoading] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!editing) return undefined
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        if (dirty && !saving) save()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [editing, dirty, saving, draft])
 
   React.useEffect(() => {
     let alive = true
     setLoading(true)
     setError('')
     setData(null)
+    setShowChanges(false)
+    setFullscreen(false)
+    setEditing(false)
+    setDirty(false)
     api
       .fileContent(cwd, file.path)
       .then((result) => {
@@ -88,6 +140,42 @@ function FilePreviewPane(props: {
     }
   }, [cwd, file.path])
 
+  const loadChanges = (): void => {
+    setShowChanges(true)
+    setDiffLoading(true)
+    setDiffPatch('')
+    api
+      .diff(cwd, file.path, false, '')
+      .then((result) => setDiffPatch(result.patch ?? ''))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setDiffLoading(false))
+  }
+
+  const startEdit = (): void => {
+    if (data === null || data.text === null) return
+    setDraft(data.text)
+    setDirty(false)
+    setEditing(true)
+  }
+
+  const save = (): void => {
+    if (!dirty) return
+    setSaving(true)
+    setError('')
+    api
+      .writeFile(cwd, file.path, draft)
+      .then((result) => {
+        setDirty(false)
+        setData((prev) => (prev === null ? prev : { ...prev, text: draft, size: result.size }))
+        onNotice(`已保存 ${file.name}`)
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setSaving(false))
+  }
+
+  const image = (): React.ReactElement =>
+    h('div', { className: 'dshg-file-image' }, h('img', { src: `data:${data?.mime};base64,${data?.base64}`, alt: file.name }))
+
   const body = (): React.ReactElement => {
     if (loading) return h('div', { className: 'dshg-diffempty' }, '正在读取文件…')
     if (error !== '') return h('div', { className: 'dshg-diffempty' }, error)
@@ -98,40 +186,68 @@ function FilePreviewPane(props: {
     if (data.binary) {
       return h('div', { className: 'dshg-diffempty' }, '二进制文件，无法预览内容')
     }
-    if (data.mime !== null && data.base64 !== '') {
-      return h(
-        'div',
-        { className: 'dshg-file-image' },
-        h('img', { src: `data:${data.mime};base64,${data.base64}`, alt: file.name }),
-      )
+    if (data.mime !== null && data.base64 !== '') return image()
+    if (showChanges) {
+      return diffLoading
+        ? h('div', { className: 'dshg-diffempty' }, '正在读取变更…')
+        : h(DiffBody, { patch: diffPatch, empty: '这个文件没有未提交的变更' })
     }
-    if (data.text !== null) {
-      const lines = data.text.split('\n')
-      return h(
-        'div',
-        { className: 'dshg-file-text' },
-        ...lines.map((line, index) =>
-          h(
-            'div',
-            { key: index, className: 'dshg-file-textline' },
-            h('span', { className: 'dshg-snum' }, index + 1),
-            h('span', { className: 'dshg-code' }, line === '' ? ' ' : line),
-          ),
-        ),
-      )
-    }
+    if (data.text !== null) return h(CodeText, { text: data.text, name: file.name })
     return h('div', { className: 'dshg-diffempty' }, '没有可预览的内容')
   }
 
-  return h(
-    'div',
-    { className: 'dshg-diff dshg-filepreview' },
+  const canShowChanges = data !== null && data.mime === null && !data.binary && !data.tooLarge
+  const canFullscreen = data !== null && !data.binary && !data.tooLarge
+  const canEdit = data !== null && !data.binary && !data.tooLarge && data.mime === null && data.text !== null
+
+  const header = (inFullscreen: boolean): React.ReactElement =>
     h(
       'div',
       { className: 'dshg-diffhead' },
       h(Icon, { name: file.isImage ? 'spark' : 'file' }),
       h('span', { className: 'dshg-diffpath', title: file.path }, file.name),
       h('span', { className: 'dshg-spacer' }),
+      canShowChanges
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'dshg-mini dshg-textbtn',
+              title: '查看这个文件未提交的变更',
+              onClick: () => {
+                if (showChanges) setShowChanges(false)
+                else loadChanges()
+              },
+            },
+            showChanges ? '查看文件' : '查看变更',
+          )
+        : null,
+      canEdit && !inFullscreen
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'dshg-mini dshg-textbtn',
+              title: '编辑这个文件',
+              onClick: startEdit,
+            },
+            h(Icon, { name: 'edit' }),
+            '编辑',
+          )
+        : null,
+      canFullscreen && !inFullscreen
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'dshg-mini dshg-textbtn',
+              title: '全屏显示',
+              onClick: () => setFullscreen(true),
+            },
+            h(Icon, { name: 'maximize' }),
+            '全屏显示',
+          )
+        : null,
       h(
         'button',
         { type: 'button', className: 'dshg-mini', title: '用系统默认应用打开', onClick: () => {
@@ -139,9 +255,93 @@ function FilePreviewPane(props: {
         } },
         h(Icon, { name: 'folder' }),
       ),
-      h('button', { type: 'button', className: 'dshg-mini', title: '关闭预览', onClick: onClose }, h(Icon, { name: 'close' })),
+      h(
+        'button',
+        { type: 'button', className: 'dshg-mini', title: inFullscreen ? '关闭全屏' : '关闭预览', onClick: inFullscreen ? () => setFullscreen(false) : onClose },
+        h(Icon, { name: 'close' }),
+      ),
+    )
+
+  return h(
+    React.Fragment,
+    null,
+    h(
+      'div',
+      { className: 'dshg-diff dshg-filepreview' },
+      header(false),
+      h('div', { className: 'dshg-diffbody' }, body()),
     ),
-    h('div', { className: 'dshg-diffbody' }, body()),
+    fullscreen
+      ? h(
+          'div',
+          { className: 'dshg-fullmask', onClick: () => setFullscreen(false) },
+          h(
+            'div',
+            { className: 'dshg-fullscreen', onClick: (event: React.MouseEvent) => event.stopPropagation() },
+            header(true),
+            h('div', { className: 'dshg-diffbody' }, body()),
+          ),
+        )
+      : null,
+    editing
+      ? h(
+          'div',
+          {
+            className: 'dshg-fullmask',
+            onClick: () => setEditing(false),
+          },
+          h(
+            'div',
+            { className: 'dshg-fullscreen dshg-editwin', onClick: (event: React.MouseEvent) => event.stopPropagation() },
+            h(
+              'div',
+              { className: 'dshg-diffhead' },
+              h(Icon, { name: 'edit' }),
+              h('span', { className: 'dshg-diffpath', title: file.path }, `编辑 ${file.name}`),
+              dirty ? h('span', { className: 'dshg-dirty' }, '● 未保存') : null,
+              h('span', { className: 'dshg-spacer' }),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-primary dshg-savebtn',
+                  disabled: saving || !dirty,
+                  onClick: save,
+                },
+                h(Icon, { name: 'check' }),
+                saving ? '保存中…' : '保存',
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-mini',
+                  title: '关闭',
+                  onClick: () => setEditing(false),
+                },
+                h(Icon, { name: 'close' }),
+              ),
+            ),
+            error !== '' ? h('div', { className: 'dshg-err' }, error) : null,
+            h('textarea', {
+              className: 'dshg-editor',
+              value: draft,
+              spellCheck: false,
+              onChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+                setDraft(event.target.value)
+                setDirty(true)
+              },
+            }),
+            h(
+              'div',
+              { className: 'dshg-editfoot' },
+              `${draft.split('\n').length} 行`,
+              h('span', { className: 'dshg-spacer' }),
+              dirty ? 'Ctrl+S 保存' : '没有未保存的修改',
+            ),
+          ),
+        )
+      : null,
   )
 }
 

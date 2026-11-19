@@ -77,7 +77,8 @@ if (data.state) {
     sessions: () => Promise.resolve(data.sessions),
     diff: (cwd_, path_, staged) => Promise.resolve(
       data.diffs[path_ + '|' + (staged ? '1' : '0')] ?? {
-        ok: true, path: path_, staged, binary: false, tooLarge: false, patch: '', added: 0, removed: 0,
+        ok: true, path: path_, staged, binary: false, tooLarge: false,
+        patch: ['@@ -1,3 +1,4 @@', '-old line', '+new line one', '+new line two', ' context line'].join('\\n'), added: 2, removed: 1,
       },
     ),
     message: () => Promise.resolve(data.message),
@@ -95,6 +96,7 @@ if (data.state) {
     commitDetail: (cwd_, sha) => Promise.resolve(
       data.commits[sha] ?? { ok: true, commit: data.commits[Object.keys(data.commits)[0]] },
     ),
+    commitFile: (cwd_, sha, p) => Promise.resolve({ ok: true, path: p, text: data.fileContent[p]?.text ?? ['// 文件内容（' + p + '）', 'const example = 1;', ''].join('\\n'), binary: false }),
     stage: () => Promise.resolve({ ok: true }),
     unstage: () => Promise.resolve({ ok: true }),
     discard: () => Promise.resolve({ ok: true }),
@@ -264,6 +266,13 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     'file-text': 'scm-popup-file-text.png',
     'file-image': 'scm-popup-file-image.png',
     'commit-menu': 'scm-popup-commit-menu.png',
+    'file-edit': 'scm-popup-file-edit.png',
+    'image-diff': 'scm-popup-image-diff.png',
+    'commit-nav': 'scm-popup-commit-nav.png',
+    'commit-expand': 'scm-popup-commit-expand.png',
+    'commit-popup': 'scm-popup-commit-popup.png',
+    'gitlab-commit': 'scm-popup-gitlab-commit.png',
+    'gitlab-file': 'scm-popup-gitlab-file.png',
   }
   const file = shots[scene] ?? shots.changes
 
@@ -319,6 +328,60 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
     await page.waitForTimeout(400)
     await page.locator('.dshg-filerow').filter({ hasText: /\.png/ }).first().click()
     await page.waitForTimeout(700)
+  } else if (scene === 'gitlab-commit') {
+    await page.getByRole('tab', { name: /图表/ }).click()
+    await page.waitForTimeout(250)
+    await page.locator('.dshg-grow').first().click()
+    await page.waitForTimeout(500)
+    await page.locator('.dshg-gitlab-toggle').first().click()
+    await page.waitForTimeout(400)
+  } else if (scene === 'gitlab-file') {
+    await page.getByRole('tab', { name: /图表/ }).click()
+    await page.waitForTimeout(250)
+    await page.locator('.dshg-grow').first().click()
+    await page.waitForTimeout(500)
+    await page.locator('.dshg-gitlab-row .dshg-textbtn').first().click()
+    await page.waitForTimeout(600)
+  } else if (scene === 'commit-expand' || scene === 'commit-popup') {
+    await page.getByRole('tab', { name: /图表/ }).click()
+    await page.waitForTimeout(250)
+    await page.locator('.dshg-grow').first().click()
+    await page.waitForTimeout(500)
+    await page.locator('.dshg-cdetail-nav-toggle').click()
+    await page.waitForTimeout(300)
+    if (scene === 'commit-popup') {
+      await page.locator('.dshg-cdetail-nav-item').nth(1).click()
+      await page.waitForTimeout(500)
+    }
+  } else if (scene === 'commit-nav') {
+    await page.getByRole('tab', { name: /图表/ }).click()
+    await page.waitForTimeout(250)
+    await page.locator('.dshg-grow').first().click()
+    await page.waitForTimeout(500)
+    const navCount = await page.locator('.dshg-cdetail-nav-item').count()
+    if (navCount > 1) await page.locator('.dshg-cdetail-nav-item').nth(navCount - 1).click()
+    await page.waitForTimeout(700)
+  } else if (scene === 'image-diff') {
+    await page.evaluate(() => {
+      const data = window.__WAGQ_GIT_DATA__
+      const png = Object.keys(data.fileContent).find((k) => /\.png$/i.test(k))
+      if (!png) return
+      const entry = { path: png, from: '', code: '??', kind: 'untracked', letter: 'U' }
+      data.state.staged = []
+      data.state.changes = []
+      data.state.untracked = [entry]
+      data.diffs[png + '|0'] = { ok: true, path: png, staged: false, binary: true, tooLarge: false, patch: 'Binary files differ', added: 0, removed: 0 }
+    })
+    await page.waitForTimeout(200)
+    await page.locator('.dshg-row').first().click()
+    await page.waitForTimeout(1500)
+  } else if (scene === 'file-edit') {
+    await page.getByRole('tab', { name: /文件浏览/ }).click()
+    await page.waitForTimeout(400)
+    await page.locator('.dshg-filerow').filter({ hasText: 'README.md' }).first().click()
+    await page.waitForTimeout(450)
+    await page.locator('.dshg-textbtn').filter({ hasText: '编辑' }).click()
+    await page.waitForTimeout(400)
   } else if (scene === 'file-text') {
     await page.getByRole('tab', { name: /文件浏览/ }).click()
     await page.waitForTimeout(400)
@@ -383,6 +446,24 @@ createRoot(document.getElementById('app')).render(React.createElement(Host))
           return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
         })(),
         filePreview: document.querySelector('.dshg-filepreview') !== null,
+        highlightTokens: document.querySelectorAll('.dshg-tok-keyword, .dshg-tok-string, .dshg-tok-comment, .dshg-tok-number').length,
+        textButtons: [...document.querySelectorAll('.dshg-textbtn')].map((n) => n.textContent.trim()),
+        fullscreen: document.querySelector('.dshg-fullscreen') !== null,
+        changeRows: document.querySelectorAll('.dshg-filepreview .dshg-difftable tr').length,
+        editor: document.querySelector('.dshg-editor') !== null,
+        saveBtn: document.querySelector('.dshg-savebtn') !== null,
+        binaryImage: document.querySelector('.dshg-diffbody .dshg-file-image img') !== null,
+        fileNavItems: document.querySelectorAll('.dshg-cdetail-nav-item').length,
+        fileSections: document.querySelectorAll('.dshg-cfile-section').length,
+        stickyHeads: document.querySelectorAll('.dshg-cfile-head').length,
+        scrollTop: (() => { const n = document.querySelector('.dshg-cdetail-body'); return n ? Math.round(n.scrollTop) : -1 })(),
+        navExpanded: document.querySelector('.dshg-cdetail-nav-expanded') !== null,
+        popupFile: document.querySelector('.dshg-fullscreen .dshg-diffbody') !== null,
+        gitlabRows: document.querySelectorAll('.dshg-gitlab-file').length,
+        gitlabHead: document.querySelector('.dshg-gitlab-head') !== null,
+        legacyMeta: document.querySelector('.dshg-cmeta') !== null,
+        rowSvgSizes: [...document.querySelectorAll('.dshg-gitlab-row > svg')].slice(0, 2).map((n) => { const r = n.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height) }),
+        rowSvgSizes:
         fileList: pick('.dshg-files-wrap > .dshg-files'),
         fileSplit: pick('.dshg-files-split'),
         imagePreviews: document.querySelectorAll('.dshg-file-image img').length,

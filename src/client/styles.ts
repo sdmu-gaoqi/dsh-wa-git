@@ -53,12 +53,20 @@ export const CSS = `
 .dshg-trigger:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshg-trigger-on{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}
 .dshg-trigger:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+/**
+ * Two entries exist in the DOM at once: the root-scoped global one (always) and
+ * the session-scoped one (only while a conversation is open). Show exactly one:
+ * once a session button is mounted, suppress the global fallback. :has() on the
+ * root element keeps the rule working from either button's stylesheet position.
+ */
+html:has(.dshg-trigger-session) .dshg-trigger-global{display:none}
 
 /**
  * The shell is a column: header / banner / tabs / commit box / body / footer.
  * isolation:isolate keeps the page behind from compositing through, and the
  * background is the flattened surface token rather than a raw alias layer.
  */
+[data-dsh-plugin="wagq-dsh-git"] svg:not([width]){width:14px;height:14px;flex:none}
 .dshg-root{font:inherit;color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;${SURFACE_CSS};isolation:isolate;border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 18px 48px -12px rgba(0,0,0,.42),0 4px 14px -6px rgba(0,0,0,.28);overflow:hidden;height:auto;max-height:min(78vh,700px);min-height:0}
 /**
  * With a side panel open the shell needs a FIXED height: the two columns only
@@ -282,7 +290,27 @@ export const CSS = `
 .dshg-danger-btn{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 12px;border:0;border-radius:7px;background:var(--dsw-alias-state-error-primary);color:#fff;font:inherit;font-size:12px;font-weight:500;cursor:pointer}
 .dshg-danger-btn:hover{filter:brightness(1.08)}
 
-/* ---- commit detail ---- */
+/* ---- GitLab-style commit detail ---- */
+.dshg-gitlab-head{flex:none;padding:10px 14px;border-bottom:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}
+.dshg-gitlab-title{font-size:13px;font-weight:600;line-height:1.5;color:var(--dsw-alias-label-primary);word-break:break-word}
+.dshg-gitlab-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.dshg-gitlab-count{font-weight:500;color:var(--dsw-alias-label-secondary)}
+.dshg-gitlab-body{margin:8px 0 0;font-family:var(--dsh-code-font-family,ui-monospace,monospace);font-size:11px;line-height:1.55;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-word;max-height:90px;overflow:auto}
+.dshg-gitlab-files{flex:none}
+.dshg-gitlab-file{border-bottom:.5px solid var(--dsw-alias-border-l3)}
+.dshg-gitlab-row{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px;position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-layer-1)}
+.dshg-gitlab-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* Direct icons in the file row (file type glyph) — without this the bare <svg>
+ * has no width constraint and blows up to the browser default. */
+.dshg-gitlab-row > svg{width:14px;height:14px;flex:none;color:var(--dsw-alias-label-tertiary)}
+.dshg-gitlab-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:none;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:0}
+.dshg-gitlab-toggle svg{width:12px;height:12px;transform:rotate(-90deg);transition:transform .12s}
+.dshg-gitlab-file-open .dshg-gitlab-toggle svg{transform:rotate(0deg)}
+.dshg-gitlab-path{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr;font-size:11.5px;color:var(--dsw-alias-label-primary);font-family:var(--dsh-code-font-family,ui-monospace,monospace)}
+.dshg-gitlab-diff{border-top:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-base);overflow:auto;max-height:50vh}
+.dshg-cmeta-row-inline{font-size:11px;color:var(--dsw-alias-label-tertiary)}
+
+/* ---- commit detail (legacy tokens kept for other views) ---- */
 /* Same column geometry as the compare panel: a flex child that shares the row.
  * flex:0 0 auto would let the content pick its own width (a long patch line
  * pushed it past 1000000px and squeezed the list to 0) — it must share instead.
@@ -295,6 +323,25 @@ export const CSS = `
 .dshg-cmeta-files{display:flex;flex-direction:column;gap:1px;max-height:88px;overflow:auto}
 .dshg-cfile{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
 .dshg-cfile-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
+/* commit detail: file navigation + sticky per-file headings */
+.dshg-cdetail-nav{flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:.5px solid var(--dsw-alias-border-l3);overflow-x:auto;scrollbar-width:thin}
+.dshg-cdetail-nav-title{flex:none;font-size:11px;font-weight:600;color:var(--dsw-alias-label-tertiary);white-space:nowrap}
+.dshg-cdetail-nav-toggle{flex:none;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border:.5px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
+.dshg-cdetail-nav-toggle svg{width:12px;height:12px;transition:transform .15s}
+.dshg-cdetail-nav-expanded{display:block;max-height:190px;overflow-y:auto;white-space:normal}
+.dshg-cdetail-nav-expanded .dshg-cdetail-nav-toggle svg{transform:rotate(180deg)}
+.dshg-cdetail-nav-full{max-width:none;width:100%;margin-top:4px;justify-content:flex-start}
+.dshg-cdetail-nav-name-full{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left}
+.dshg-cdetail-nav-item{flex:none;display:inline-flex;align-items:center;gap:6px;max-width:220px;height:24px;padding:0 9px;border:.5px solid var(--dsw-alias-border-l2);border-radius:99px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
+.dshg-cdetail-nav-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshg-cdetail-nav-on{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary)}
+.dshg-cdetail-nav-name{overflow:hidden;text-overflow:ellipsis}
+.dshg-cdetail-nav-stat{flex:none;font-size:10px;font-variant-numeric:tabular-nums}
+.dshg-cdetail-body{position:relative}
+.dshg-cfile-section{scroll-margin-top:4px}
+.dshg-cfile-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:5px 10px;background-color:var(--dsw-alias-bg-base);background-image:linear-gradient(var(--dsw-alias-bg-layer-2),var(--dsw-alias-bg-layer-2));border-top:.5px solid var(--dsw-alias-border-l2);border-bottom:.5px solid var(--dsw-alias-border-l3);font-size:11.5px;color:var(--dsw-alias-label-primary)}
+.dshg-cfile-head svg{width:13px;height:13px;flex:none;color:var(--dsw-alias-label-tertiary)}
+.dshg-cfile-head-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--dsh-code-font-family,ui-monospace,monospace)}
 
 /* ---- upstream compare ---- */
 .dshg-compare{flex:1 1 60%;min-width:320px}
@@ -346,6 +393,25 @@ export const CSS = `
 .dshg-file-text{flex:1;min-height:0;overflow:auto;font-family:var(--dsh-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.55}
 .dshg-file-textline{display:grid;grid-template-columns:44px minmax(0,1fr);min-width:0}
 .dshg-file-textline:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* syntax highlight tokens */
+.dshg-tok-comment{color:var(--dsw-alias-label-quaternary);font-style:italic}
+.dshg-tok-string{color:var(--dsw-alias-state-success-primary)}
+.dshg-tok-number{color:var(--dsw-alias-state-warn-primary)}
+.dshg-tok-keyword{color:var(--dsw-alias-state-business-primary);font-weight:600}
+.dshg-tok-type{color:#4ec9b0}
+.dshg-tok-func{color:#dcdcaa}
+/* fullscreen preview */
+.dshg-fullmask{position:fixed;inset:0;z-index:9900;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:5vh 5vw}
+.dshg-fullscreen{width:100%;height:90vh;max-width:1400px;display:flex;flex-direction:column;background-color:var(--dsw-alias-bg-base);background-image:linear-gradient(var(--dsw-alias-bg-layer-1),var(--dsw-alias-bg-layer-1));border:.5px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;box-shadow:0 24px 80px -20px rgba(0,0,0,.7)}
+.dshg-textbtn{display:inline-flex;align-items:center;gap:5px;padding:0 8px;font:inherit;font-size:11px;line-height:1;white-space:nowrap;height:22px;border:.5px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dshg-textbtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshg-textbtn svg{width:12px;height:12px}
+/* editor */
+.dshg-editwin{background-image:linear-gradient(var(--dsw-alias-bg-layer-2),var(--dsw-alias-bg-layer-2))}
+.dshg-editor{flex:1 1 auto;min-height:0;width:100%;resize:none;border:0;outline:0;padding:14px 18px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsh-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:12.5px;line-height:1.6;tab-size:2}
+.dshg-editfoot{flex:none;display:flex;align-items:center;gap:8px;padding:6px 12px;border-top:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-quaternary)}
+.dshg-dirty{font-size:11px;color:var(--dsw-alias-state-warn-primary)}
+.dshg-savebtn{height:24px;padding:0 12px;flex:none;font-size:11px;gap:5px}
 .dshg-files{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .dshg-files-bar{flex:none;display:flex;align-items:center;gap:3px;padding:5px 8px;border-bottom:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .dshg-files-bar .dshg-mini svg{transform:rotate(90deg)}

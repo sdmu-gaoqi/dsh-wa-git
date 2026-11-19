@@ -42,6 +42,39 @@ const META_PREFIXES = [
   'GIT binary patch',
 ]
 
+export interface PatchFile {
+  path: string
+  patch: string
+  from?: string
+}
+
+/**
+ * Split one combined `git diff` / `git show` patch into per-file sections.
+ * Each section keeps its `diff --git` header (parsePatch drops it) and is
+ * rendered under its own sticky file heading.
+ */
+export function splitPatchByFile(patch: string): PatchFile[] {
+  const lines = patch.split('\n')
+  const sections: { path: string; lines: string[] }[] = []
+  let current: { path: string; lines: string[] } | null = null
+  for (const line of lines) {
+    if (line.startsWith('diff --git ')) {
+      // "diff --git a/foo b/foo" — paths may contain spaces, so take the two
+      // halves around the " b/" marker.
+      const match = /^diff --git a\/(.*?) b\/(.*)$/.exec(line)
+      const path = match !== null ? match[2] : line.slice('diff --git '.length)
+      current = { path, lines: [] }
+      sections.push(current)
+    }
+    if (current === null) continue
+    current.lines.push(line)
+  }
+  return sections.map((section) => ({
+    path: section.path,
+    patch: section.lines.join('\n'),
+  }))
+}
+
 export function parsePatch(patch: string): DiffLine[] {
   const out: DiffLine[] = []
   let oldNo = 0

@@ -1,4 +1,4 @@
-import { GitError, addRemote, branches, checkout, commit, commitAction, commitDetail, compare, conflictFiles, deleteBranch, diff, discard, fileHistory, graph, listFiles, readFileContent, openInFileManager, remotes, removeRemote, resolveConflict, resolveRepoDir, setRemoteUrl, stage, status, suggestMessage, sync, terminalRun, unstage, } from './git.js';
+import { GitError, addRemote, branches, checkout, commit, commitAction, commitDetail, compare, commitFileContent, conflictFiles, deleteBranch, diff, discard, fileHistory, graph, listFiles, readFileContent, writeFileContent, openInFileManager, remotes, removeRemote, resolveConflict, resolveRepoDir, setRemoteUrl, stage, status, suggestMessage, sync, terminalRun, unstage, } from './git.js';
 import { generateCommitMessage } from './generate.js';
 export const name = 'wagq-dsh-git';
 // Wait until the web server is ready; `sessions` is looked up lazily so the
@@ -237,6 +237,19 @@ export function apply(ctx) {
                     sendJson(res, 200, { ok: true, ...content });
                     return;
                 }
+                if (url.pathname === `${PREFIX}/api/write-file`) {
+                    if (req.method !== 'POST') {
+                        sendJson(res, 405, { ok: false, error: 'method not allowed' });
+                        return;
+                    }
+                    const bodyWrite = await readBody(req);
+                    const cwd = await resolveRepoDir(typeof bodyWrite.cwd === 'string' ? bodyWrite.cwd : fallbackCwd);
+                    const path = requiredString(bodyWrite.path, 'path');
+                    const text = typeof bodyWrite.text === 'string' ? bodyWrite.text : '';
+                    const result = await writeFileContent(cwd, path, text);
+                    sendJson(res, 200, { ok: true, ...result });
+                    return;
+                }
                 if (url.pathname === `${PREFIX}/api/file-history`) {
                     if (req.method !== 'GET') {
                         sendJson(res, 405, { ok: false, error: 'method not allowed' });
@@ -263,6 +276,17 @@ export function apply(ctx) {
                         const detail = error instanceof Error ? error.message : String(error);
                         throw new GitError(`无法打开：${detail}`, 500, detail);
                     }
+                    return;
+                }
+                if (url.pathname === `${PREFIX}/api/commit-file`) {
+                    if (req.method !== 'GET') {
+                        sendJson(res, 405, { ok: false, error: 'method not allowed' });
+                        return;
+                    }
+                    const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd);
+                    const sha = requiredString(url.searchParams.get('sha'), 'sha');
+                    const path = requiredString(url.searchParams.get('path'), 'path');
+                    sendJson(res, 200, { ok: true, ...(await commitFileContent(cwd, sha, path)) });
                     return;
                 }
                 if (url.pathname === `${PREFIX}/api/conflicts`) {

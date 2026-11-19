@@ -39,6 +39,7 @@ import {
   commitAction,
   commitDetail,
   compare,
+  commitFileContent,
   conflictFiles,
   deleteBranch,
   diff,
@@ -47,6 +48,7 @@ import {
   graph,
   listFiles,
   readFileContent,
+  writeFileContent,
   openInFileManager,
   remotes,
   removeRemote,
@@ -94,6 +96,7 @@ interface Body {
   setUpstream?: unknown
   command?: unknown
   reveal?: unknown
+  text?: unknown
 }
 
 const COMMIT_ACTIONS = new Set<CommitAction>(['revert', 'reset-soft', 'reset-mixed', 'reset-hard', 'rebase'])
@@ -332,6 +335,20 @@ export function apply(ctx: HostContext) {
           return
         }
 
+        if (url.pathname === `${PREFIX}/api/write-file`) {
+          if (req.method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const bodyWrite = await readBody(req)
+          const cwd = await resolveRepoDir(typeof bodyWrite.cwd === 'string' ? bodyWrite.cwd : fallbackCwd)
+          const path = requiredString(bodyWrite.path, 'path')
+          const text = typeof bodyWrite.text === 'string' ? bodyWrite.text : ''
+          const result = await writeFileContent(cwd, path, text)
+          sendJson(res, 200, { ok: true, ...result })
+          return
+        }
+
         if (url.pathname === `${PREFIX}/api/file-history`) {
           if (req.method !== 'GET') {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
@@ -358,6 +375,18 @@ export function apply(ctx: HostContext) {
             const detail = error instanceof Error ? error.message : String(error)
             throw new GitError(`无法打开：${detail}`, 500, detail)
           }
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/commit-file`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const sha = requiredString(url.searchParams.get('sha'), 'sha')
+          const path = requiredString(url.searchParams.get('path'), 'path')
+          sendJson(res, 200, { ok: true, ...(await commitFileContent(cwd, sha, path)) })
           return
         }
 

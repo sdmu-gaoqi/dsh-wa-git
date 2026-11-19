@@ -29,6 +29,8 @@ import { CSS } from './styles'
 import { layoutGraph, laneColor } from './graph'
 import type { GraphRow } from './graph'
 import { DiffBody, DiffBodySplit } from './parts/DiffBody'
+import { BinaryDiffView } from './parts/BinaryDiffView'
+import { CommitDetailView } from './parts/CommitDetail'
 import { ConflictPanel } from './parts/ConflictPanel'
 import { ConfirmDialog } from './parts/ConfirmDialog'
 import { FileBrowser } from './parts/FileBrowser'
@@ -266,134 +268,6 @@ function useRepoState(cwd: string, open: boolean): RepoHook {
   }, [open, load])
 
   return { state, loading, error, refresh: load }
-}
-
-/* ------------------------------------------------------------ commit detail */
-
-function CommitDetailView(props: {
-  cwd: string
-  sha: string
-  split: boolean
-  onToggleSplit: () => void
-  onClose: () => void
-}): React.ReactElement {
-  const { cwd, sha, split, onClose } = props
-  const [detail, setDetail] = React.useState<CommitDetail | null>(null)
-  const [error, setError] = React.useState('')
-  const [loading, setLoading] = React.useState(true)
-
-  React.useEffect(() => {
-    let alive = true
-    setLoading(true)
-    setError('')
-    setDetail(null)
-    api
-      .commitDetail(cwd, sha)
-      .then((result) => {
-        if (alive) setDetail(result.commit)
-      })
-      .catch((err: unknown) => {
-        if (alive) setError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => {
-        if (alive) setLoading(false)
-      })
-    return () => {
-      alive = false
-    }
-  }, [cwd, sha])
-
-  const meta = (): React.ReactElement | null => {
-    if (detail === null) return null
-    return React.createElement(
-      'div',
-      { className: 'dshg-cmeta' },
-      React.createElement('div', { className: 'dshg-cmeta-subject' }, detail.subject === '' ? '(no message)' : detail.subject),
-      React.createElement(
-        'div',
-        { className: 'dshg-cmeta-row' },
-        React.createElement('span', { className: 'dshg-gsha' }, detail.short),
-        React.createElement('span', null, detail.author),
-        React.createElement('span', { title: absoluteTime(detail.time) }, relativeTime(detail.time)),
-        detail.parents.length > 1
-          ? React.createElement('span', { className: 'dshg-gref', 'data-kind': 'remote' }, `merge · ${detail.parents.length} parents`)
-          : null,
-      ),
-      detail.body.trim() === ''
-        ? null
-        : React.createElement('pre', { className: 'dshg-cmeta-body' }, detail.body.trim()),
-      React.createElement(
-        'div',
-        { className: 'dshg-cmeta-files' },
-        ...detail.files.map((file) =>
-          React.createElement(
-            'span',
-            { key: `${file.path}:${file.from}`, className: 'dshg-cfile', title: file.from === '' ? file.path : `${file.from} → ${file.path}` },
-            React.createElement('span', { className: 'dshg-cfile-name' }, file.path),
-            file.binary
-              ? React.createElement('span', { className: 'dshg-rowstat' }, 'bin')
-              : React.createElement(
-                  'span',
-                  { className: 'dshg-rowstat' },
-                  React.createElement('span', { className: 'dshg-add' }, `+${file.added}`),
-                  React.createElement('span', { className: 'dshg-del' }, `−${file.removed}`),
-                ),
-          ),
-        ),
-      ),
-    )
-  }
-
-  return React.createElement(
-    'div',
-    { className: 'dshg-diff dshg-cdetail' },
-    React.createElement(
-      'div',
-      { className: 'dshg-diffhead' },
-      React.createElement(Icon, { name: 'commit' }),
-      React.createElement('span', { className: 'dshg-diffpath' }, `提交 ${sha.slice(0, 7)}`),
-      detail !== null
-        ? React.createElement(
-            'span',
-            { className: 'dshg-rowstat' },
-            React.createElement('span', { className: 'dshg-add' }, `+${detail.added}`),
-            React.createElement('span', { className: 'dshg-del' }, `−${detail.removed}`),
-          )
-        : null,
-      React.createElement('span', { className: 'dshg-spacer' }),
-      React.createElement(
-        'button',
-        {
-          type: 'button',
-          className: 'dshg-mini',
-          title: split ? '切换为行内视图' : '切换为并排视图',
-          'aria-pressed': split,
-          onClick: () => props.onToggleSplit(),
-        },
-        React.createElement('span', { className: 'dshg-viewtoggle' }, split ? '并排' : '行内'),
-      ),
-      React.createElement(
-        'button',
-        { type: 'button', className: 'dshg-mini', title: '关闭（Esc）', onClick: onClose },
-        React.createElement(Icon, { name: 'close' }),
-      ),
-    ),
-    React.createElement(
-      'div',
-      { className: `dshg-diffbody${split ? ' dshg-diffbody-split' : ''}` },
-      loading ? React.createElement('div', { className: 'dshg-diffempty' }, '正在读取提交…') : null,
-      !loading && error !== '' ? React.createElement('div', { className: 'dshg-diffempty' }, error) : null,
-      !loading && detail !== null
-        ? React.createElement(
-            React.Fragment,
-            null,
-            meta(),
-            React.createElement(split ? DiffBodySplit : DiffBody, { patch: detail.patch, empty: '这个提交没有文本差异' }),
-            detail.tooLarge ? React.createElement('div', { className: 'dshg-diffempty' }, '差异过大，仅显示前 60 万字符') : null,
-          )
-        : null,
-    ),
-  )
 }
 
 /* -------------------------------------------------------------- branch menu */
@@ -1514,7 +1388,7 @@ function Popup(props: PopupProps): React.ReactElement {
                 diffLoading ? React.createElement('div', { className: 'dshg-diffempty' }, '正在读取差异…') : null,
                 !diffLoading && diffError !== '' ? React.createElement('div', { className: 'dshg-diffempty' }, diffError) : null,
                 !diffLoading && diffPayload !== null && diffPayload.binary
-                  ? React.createElement('div', { className: 'dshg-diffempty' }, '二进制文件，无法以文本显示差异')
+                  ? React.createElement(BinaryDiffView, { cwd, path: diffPayload.path })
                   : null,
                 !diffLoading && diffPayload !== null && !diffPayload.binary
                   ? React.createElement(diffSplit ? DiffBodySplit : DiffBody, { patch: diffPayload.patch })
@@ -1919,11 +1793,49 @@ function Popup(props: PopupProps): React.ReactElement {
 
 /* ------------------------------------------------------------------ button */
 
+/**
+ * The client slot hands over a bare session id, while the host `/sessions`
+ * route reports ids prefixed with `session-`. Comparing them verbatim never
+ * matched, so the popup always fell back to the first session's repository
+ * instead of the one whose header button was clicked. Normalize both sides.
+ */
+function sameSessionId(a: string, b: string): boolean {
+  const strip = (value: string): string => value.replace(/^session-/, '')
+  const left = strip(a)
+  return left !== '' && left === strip(b)
+}
+
+interface SessionRowLike {
+  cwd?: string
+}
+
+interface SessionsStoreState {
+  /** Session ids in display order; the last entry is the newest session. */
+  ids?: string[]
+  byId?: Record<string, SessionRowLike>
+}
+
+/** The framework injects this standard prop into every session-scoped slot. */
+export type UseSessions = <T>(selector: (state: SessionsStoreState) => T) => T
+
 export interface GitHeaderButtonProps {
   /** Injected by the slot (scope: session). */
   sessionId?: string
+  /**
+   * Standard prop from DSH's slot runtime (same one the shipped open-in-app
+   * header action uses). Reading cwd from here avoids the id-format mismatch
+   * that the `/sessions` HTTP route has.
+   */
+  useSessions?: UseSessions
   /** Optional direct directory override. */
   cwd?: string
+  /**
+   * `session` (default) is the per-conversation button, rendered in the
+   * session-scoped header utilities. `global` is the root-scoped fallback that
+   * stays reachable when no Session is selected (DSH hides all session slots
+   * in that state).
+   */
+  variant?: 'session' | 'global'
 }
 
 /**
@@ -1933,6 +1845,7 @@ export interface GitHeaderButtonProps {
  */
 export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement {
   ensureStyles()
+  const global = props.variant === 'global'
   const [open, setOpen] = React.useState(false)
   const [anchor, setAnchor] = React.useState<DOMRect | null>(null)
   const [cwd, setCwd] = React.useState(props.cwd ?? '')
@@ -1940,24 +1853,79 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
   const [resolveError, setResolveError] = React.useState('')
   const buttonRef = React.useRef<HTMLButtonElement | null>(null)
 
+  // Primary source: the live sessions store, keyed exactly like the injected
+  // sessionId. This is what the built-in open-in-app action does.
+  const storeCwd = props.useSessions?.<string | undefined>((state) => {
+    const byId = state.byId
+    if (byId === undefined) return undefined
+    const wanted = props.sessionId
+    if (wanted !== undefined) {
+      const direct = byId[wanted]?.cwd
+      if (typeof direct === 'string' && direct !== '') return direct
+      // The store keys and the injected id may differ by a `session-` prefix
+      // depending on how the session was created; look up the normalized pair.
+      for (const [key, row] of Object.entries(byId)) {
+        if (sameSessionId(key, wanted) && typeof row?.cwd === 'string' && row.cwd !== '') return row.cwd
+      }
+      return undefined
+    }
+    // No session id (the blank "new session" screen still shows this button).
+    // Use the most recently listed session — never a hard-coded first entry,
+    // which is what previously displayed an unrelated project's repository.
+    const ids = state.ids
+    const newest = Array.isArray(ids) && ids.length > 0 ? ids[ids.length - 1] : undefined
+    const fromNewest = newest === undefined ? undefined : byId[newest]?.cwd
+    if (typeof fromNewest === 'string' && fromNewest !== '') return fromNewest
+    for (const row of Object.values(byId)) {
+      if (typeof row?.cwd === 'string' && row.cwd !== '') return row.cwd
+    }
+    return undefined
+  })
+
+  // `cwd` is resolved per session and must be dropped when the button is
+  // re-used for a different session; otherwise switching conversations keeps
+  // showing the previous repository.
+  const resolvedFor = React.useRef<string | undefined>(undefined)
+
   React.useEffect(() => {
-    if (!open || cwd !== '' || resolving) return
+    if (resolvedFor.current !== props.sessionId) {
+      resolvedFor.current = props.sessionId
+      setCwd(props.cwd ?? '')
+      setResolveError('')
+    }
+  }, [props.sessionId, props.cwd])
+
+  React.useEffect(() => {
+    if (!open || resolving) return
+    // Store already knows this session's cwd — use it directly and stay in sync
+    // when the user switches the session's working directory.
+    if (!global && typeof storeCwd === 'string' && storeCwd !== '') {
+      setCwd((prev) => (prev === storeCwd ? prev : storeCwd))
+      return
+    }
+    if (cwd !== '') return
     setResolving(true)
     setResolveError('')
+    const wanted = props.sessionId ?? ''
     api
       .sessions()
       .then((result) => {
-        const wanted = props.sessionId ?? ''
-        const hit = result.sessions.find((row) => row.id === wanted) ?? result.sessions[0]
+        // Only an exact match for THIS session is acceptable. Picking another
+        // session's repository (the old `?? result.sessions[0]` fallback) made
+        // the panel show project A while the user was working in project B.
+        const hit = wanted === '' ? undefined : result.sessions.find((row) => sameSessionId(row.id, wanted))
         if (hit === undefined) {
-          setResolveError('没有可用的工作目录')
+          // The global button (or a session the host has not listed yet) falls
+          // back to the plugin's own working directory: the host routes resolve
+          // an empty cwd to process.cwd(), which is still a real repo.
+          setCwd('')
           return
         }
         setCwd(hit.cwd)
       })
       .catch((err: unknown) => setResolveError(err instanceof Error ? err.message : String(err)))
       .finally(() => setResolving(false))
-  }, [open, cwd, resolving, props.sessionId])
+  }, [open, cwd, resolving, global, props.sessionId, storeCwd])
 
   return React.createElement(
     React.Fragment,
@@ -1967,12 +1935,12 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
       {
         ref: buttonRef,
         type: 'button',
-        className: `dshg-iconbtn dshg-trigger${open ? ' dshg-trigger-on' : ''}`,
+        className: `dshg-iconbtn dshg-trigger${open ? ' dshg-trigger-on' : ''}${global ? ' dshg-trigger-global' : ' dshg-trigger-session'}`,
         title: '源代码管理（Git）',
         'aria-label': '源代码管理',
         'aria-expanded': open,
         'data-dsh-plugin': 'wagq-dsh-git',
-        'data-dsh-part': 'scm-button',
+        'data-dsh-part': global ? 'scm-button-global' : 'scm-button',
         onClick: () => {
           setAnchor(buttonRef.current?.getBoundingClientRect() ?? null)
           setOpen((prev) => !prev)

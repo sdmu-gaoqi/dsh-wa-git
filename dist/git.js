@@ -7,7 +7,7 @@
  * raised because `git log --all` on a large repo is routinely multi-megabyte.
  */
 import { execFile } from 'node:child_process';
-import { readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, extname } from 'node:path';
 import { promisify } from 'node:util';
 import { openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command';
@@ -1147,6 +1147,55 @@ export async function readFileContent(cwd, rel) {
         return { path: within, mime: null, base64: '', text: null, binary: true, tooLarge: false, size };
     }
     return { path: within, mime: null, base64: '', text: buf.toString('utf8'), binary: false, tooLarge: false, size };
+}
+/**
+ * Write text back to a file in the repo.
+ *
+ * Reuses the same containment check as readFileContent: only relative paths
+ * inside the repo root, no absolute paths, no `..`. Images / binary files are
+ * rejected so an edit cannot corrupt them.
+ */
+export async function writeFileContent(cwd, rel, text) {
+    const target = rel.trim();
+    if (target === '')
+        throw new GitError('缺少文件路径', 400);
+    if (isAbsolute(target) || /^[A-Za-z]:/.test(target) || target.split(/[\\/]/).includes('..')) {
+        throw new GitError('路径必须是仓库内的相对路径', 400);
+    }
+    const ext = extname(target).toLowerCase();
+    if (IMAGE_TYPES[ext] !== undefined)
+        throw new GitError('图片文件不能作为文本编辑', 400);
+    const root = await realpath(cwd);
+    const full = await realpath(resolve(root, target)).catch(() => {
+        throw new GitError('文件不存在', 404);
+    });
+    const within = relative(root, full);
+    if (within.startsWith('..') || isAbsolute(within))
+        throw new GitError('不能修改仓库之外的文件', 403);
+    const buf = Buffer.from(text, 'utf8');
+    if (buf.length > MAX_TEXT_BYTES)
+        throw new GitError('内容太大，无法保存', 413);
+    await writeFile(full, buf);
+    return { path: within, size: buf.length };
+}
+/**
+ * Read a file's content AS OF a specific commit (`git show <sha>:<path>`),
+ * for the "查看当前提交下文件内容" action in the commit detail view.
+ */
+export async function commitFileContent(cwd, sha, path) {
+    if (!/^[0-9a-fA-F]{4,40}$/.test(sha))
+        throw new GitError('提交哈希格式不正确', 400);
+    if (path.trim() === '' || path.split(/[\\/]/).includes('..'))
+        throw new GitError('文件路径不正确', 400);
+    const spec = `${sha}:${path.split('\\').join('/')}`;
+    let text;
+    try {
+        text = (await gitOrThrow(cwd, ['cat-file', '-p', spec])).replace(/\0/g, '');
+    }
+    catch {
+        throw new GitError('这个提交里没有该文件', 404);
+    }
+    return { path, text, binary: false };
 }
 /** Commits that touched one path (used by "显示 Git 历史" on a file). */
 export async function fileHistory(cwd, rel, limit = 60) {

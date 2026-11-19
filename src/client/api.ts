@@ -287,6 +287,12 @@ export const api = {
   fileContent(cwd: string, path: string): Promise<FileContent> {
     return get('file-content', { cwd, path })
   },
+  writeFile(cwd: string, path: string, text: string): Promise<{ ok: true; path: string; size: number }> {
+    return post('write-file', { cwd, path, text })
+  },
+  commitFile(cwd: string, sha: string, path: string): Promise<{ ok: true; path: string; text: string; binary: boolean }> {
+    return get('commit-file', { cwd, sha, path })
+  },
   fileHistory(cwd: string, path: string): Promise<{ ok: true; commits: CommitNode[] }> {
     return get('file-history', { cwd, path })
   },

@@ -44,7 +44,7 @@ __export(index_exports, {
 module.exports = __toCommonJS(index_exports);
 
 // src/client/ScmPanel.ts
-var React7 = __toESM(require("react"), 1);
+var React9 = __toESM(require("react"), 1);
 
 // src/client/api.ts
 var ApiError = class extends Error {
@@ -131,6 +131,12 @@ var api = {
   fileContent(cwd, path) {
     return get("file-content", { cwd, path });
   },
+  writeFile(cwd, path, text) {
+    return post("write-file", { cwd, path, text });
+  },
+  commitFile(cwd, sha, path) {
+    return get("commit-file", { cwd, sha, path });
+  },
   fileHistory(cwd, path) {
     return get("file-history", { cwd, path });
   },
@@ -202,7 +208,9 @@ var ICONS = {
   upload: "M7 13.8h2V6.5l2.6 2.6 1.4-1.4L8 2.8 3 7.8l1.4 1.4L7 6.5Zm-4.6-11h11.2V1.2H2.4Z",
   history: "M8 2.4a5.6 5.6 0 1 1-5.5 6.7H.8A6.9 6.9 0 1 0 2.9 3.4V1.5H1.4v3.9h3.9V3.9H3.6A5.6 5.6 0 0 1 8 2.4Zm-.8 2.7v3.3l2.6 1.5.8-1.3-1.9-1.1V5.1Z",
   repo: "M2.7 2.7h8.6a1.3 1.3 0 0 1 1.3 1.3v8.7h-1.3V5.3H2.7Zm0 0v10h1.3V4H4v8.7H2.7Zm2.6 1.3a1 1 0 0 1 1-1h1.4a1 1 0 0 1 0 2H6.3a1 1 0 0 1-1-1Z",
-  spark: "M8 1.2 9.4 5l3.8 1.4L9.4 7.8 8 11.6 6.6 7.8 2.8 6.4 6.6 5Zm4.6 8.2.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7Zm-9.2.6.5 1.4 1.4.6-1.4.6-.5 1.4-.6-1.4-1.4-.6 1.4-.6Z"
+  spark: "M8 1.2 9.4 5l3.8 1.4L9.4 7.8 8 11.6 6.6 7.8 2.8 6.4 6.6 5Zm4.6 8.2.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7Zm-9.2.6.5 1.4 1.4.6-1.4.6-.5 1.4-.6-1.4-1.4-.6 1.4-.6Z",
+  maximize: "M2 2h4.6v1.5H3.5v3H2Zm7.4 0H14v4.5h-1.5v-3H9.4ZM2 9.4h1.5v3h3V14H2Zm10.5 0H14V14H9.4v-1.5h3Z",
+  edit: "M11.9 1.7a1.8 1.8 0 0 1 2.6 2.6l-8 8L3 14l1.7-3.5Zm1.6 1.1L11 5.3l1.9 1.9 2.5-2.5a.9.9 0 0 0-1.3-1.3ZM9.8 6.5 4.6 11.7 4 13l1.3-.6 5.2-5.2Z"
 };
 
 // src/client/styles.ts
@@ -228,12 +236,20 @@ var CSS = `
 .dshg-trigger:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshg-trigger-on{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}
 .dshg-trigger:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+/**
+ * Two entries exist in the DOM at once: the root-scoped global one (always) and
+ * the session-scoped one (only while a conversation is open). Show exactly one:
+ * once a session button is mounted, suppress the global fallback. :has() on the
+ * root element keeps the rule working from either button's stylesheet position.
+ */
+html:has(.dshg-trigger-session) .dshg-trigger-global{display:none}
 
 /**
  * The shell is a column: header / banner / tabs / commit box / body / footer.
  * isolation:isolate keeps the page behind from compositing through, and the
  * background is the flattened surface token rather than a raw alias layer.
  */
+[data-dsh-plugin="wagq-dsh-git"] svg:not([width]){width:14px;height:14px;flex:none}
 .dshg-root{font:inherit;color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;${SURFACE_CSS};isolation:isolate;border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 18px 48px -12px rgba(0,0,0,.42),0 4px 14px -6px rgba(0,0,0,.28);overflow:hidden;height:auto;max-height:min(78vh,700px);min-height:0}
 /**
  * With a side panel open the shell needs a FIXED height: the two columns only
@@ -457,7 +473,27 @@ var CSS = `
 .dshg-danger-btn{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 12px;border:0;border-radius:7px;background:var(--dsw-alias-state-error-primary);color:#fff;font:inherit;font-size:12px;font-weight:500;cursor:pointer}
 .dshg-danger-btn:hover{filter:brightness(1.08)}
 
-/* ---- commit detail ---- */
+/* ---- GitLab-style commit detail ---- */
+.dshg-gitlab-head{flex:none;padding:10px 14px;border-bottom:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}
+.dshg-gitlab-title{font-size:13px;font-weight:600;line-height:1.5;color:var(--dsw-alias-label-primary);word-break:break-word}
+.dshg-gitlab-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.dshg-gitlab-count{font-weight:500;color:var(--dsw-alias-label-secondary)}
+.dshg-gitlab-body{margin:8px 0 0;font-family:var(--dsh-code-font-family,ui-monospace,monospace);font-size:11px;line-height:1.55;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-word;max-height:90px;overflow:auto}
+.dshg-gitlab-files{flex:none}
+.dshg-gitlab-file{border-bottom:.5px solid var(--dsw-alias-border-l3)}
+.dshg-gitlab-row{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px;position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-layer-1)}
+.dshg-gitlab-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* Direct icons in the file row (file type glyph) \u2014 without this the bare <svg>
+ * has no width constraint and blows up to the browser default. */
+.dshg-gitlab-row > svg{width:14px;height:14px;flex:none;color:var(--dsw-alias-label-tertiary)}
+.dshg-gitlab-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:none;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:0}
+.dshg-gitlab-toggle svg{width:12px;height:12px;transform:rotate(-90deg);transition:transform .12s}
+.dshg-gitlab-file-open .dshg-gitlab-toggle svg{transform:rotate(0deg)}
+.dshg-gitlab-path{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr;font-size:11.5px;color:var(--dsw-alias-label-primary);font-family:var(--dsh-code-font-family,ui-monospace,monospace)}
+.dshg-gitlab-diff{border-top:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-base);overflow:auto;max-height:50vh}
+.dshg-cmeta-row-inline{font-size:11px;color:var(--dsw-alias-label-tertiary)}
+
+/* ---- commit detail (legacy tokens kept for other views) ---- */
 /* Same column geometry as the compare panel: a flex child that shares the row.
  * flex:0 0 auto would let the content pick its own width (a long patch line
  * pushed it past 1000000px and squeezed the list to 0) \u2014 it must share instead.
@@ -470,6 +506,25 @@ var CSS = `
 .dshg-cmeta-files{display:flex;flex-direction:column;gap:1px;max-height:88px;overflow:auto}
 .dshg-cfile{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
 .dshg-cfile-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
+/* commit detail: file navigation + sticky per-file headings */
+.dshg-cdetail-nav{flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:.5px solid var(--dsw-alias-border-l3);overflow-x:auto;scrollbar-width:thin}
+.dshg-cdetail-nav-title{flex:none;font-size:11px;font-weight:600;color:var(--dsw-alias-label-tertiary);white-space:nowrap}
+.dshg-cdetail-nav-toggle{flex:none;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border:.5px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
+.dshg-cdetail-nav-toggle svg{width:12px;height:12px;transition:transform .15s}
+.dshg-cdetail-nav-expanded{display:block;max-height:190px;overflow-y:auto;white-space:normal}
+.dshg-cdetail-nav-expanded .dshg-cdetail-nav-toggle svg{transform:rotate(180deg)}
+.dshg-cdetail-nav-full{max-width:none;width:100%;margin-top:4px;justify-content:flex-start}
+.dshg-cdetail-nav-name-full{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left}
+.dshg-cdetail-nav-item{flex:none;display:inline-flex;align-items:center;gap:6px;max-width:220px;height:24px;padding:0 9px;border:.5px solid var(--dsw-alias-border-l2);border-radius:99px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
+.dshg-cdetail-nav-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshg-cdetail-nav-on{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary)}
+.dshg-cdetail-nav-name{overflow:hidden;text-overflow:ellipsis}
+.dshg-cdetail-nav-stat{flex:none;font-size:10px;font-variant-numeric:tabular-nums}
+.dshg-cdetail-body{position:relative}
+.dshg-cfile-section{scroll-margin-top:4px}
+.dshg-cfile-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:5px 10px;background-color:var(--dsw-alias-bg-base);background-image:linear-gradient(var(--dsw-alias-bg-layer-2),var(--dsw-alias-bg-layer-2));border-top:.5px solid var(--dsw-alias-border-l2);border-bottom:.5px solid var(--dsw-alias-border-l3);font-size:11.5px;color:var(--dsw-alias-label-primary)}
+.dshg-cfile-head svg{width:13px;height:13px;flex:none;color:var(--dsw-alias-label-tertiary)}
+.dshg-cfile-head-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--dsh-code-font-family,ui-monospace,monospace)}
 
 /* ---- upstream compare ---- */
 .dshg-compare{flex:1 1 60%;min-width:320px}
@@ -521,6 +576,25 @@ var CSS = `
 .dshg-file-text{flex:1;min-height:0;overflow:auto;font-family:var(--dsh-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.55}
 .dshg-file-textline{display:grid;grid-template-columns:44px minmax(0,1fr);min-width:0}
 .dshg-file-textline:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* syntax highlight tokens */
+.dshg-tok-comment{color:var(--dsw-alias-label-quaternary);font-style:italic}
+.dshg-tok-string{color:var(--dsw-alias-state-success-primary)}
+.dshg-tok-number{color:var(--dsw-alias-state-warn-primary)}
+.dshg-tok-keyword{color:var(--dsw-alias-state-business-primary);font-weight:600}
+.dshg-tok-type{color:#4ec9b0}
+.dshg-tok-func{color:#dcdcaa}
+/* fullscreen preview */
+.dshg-fullmask{position:fixed;inset:0;z-index:9900;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:5vh 5vw}
+.dshg-fullscreen{width:100%;height:90vh;max-width:1400px;display:flex;flex-direction:column;background-color:var(--dsw-alias-bg-base);background-image:linear-gradient(var(--dsw-alias-bg-layer-1),var(--dsw-alias-bg-layer-1));border:.5px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;box-shadow:0 24px 80px -20px rgba(0,0,0,.7)}
+.dshg-textbtn{display:inline-flex;align-items:center;gap:5px;padding:0 8px;font:inherit;font-size:11px;line-height:1;white-space:nowrap;height:22px;border:.5px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dshg-textbtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshg-textbtn svg{width:12px;height:12px}
+/* editor */
+.dshg-editwin{background-image:linear-gradient(var(--dsw-alias-bg-layer-2),var(--dsw-alias-bg-layer-2))}
+.dshg-editor{flex:1 1 auto;min-height:0;width:100%;resize:none;border:0;outline:0;padding:14px 18px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsh-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:12.5px;line-height:1.6;tab-size:2}
+.dshg-editfoot{flex:none;display:flex;align-items:center;gap:8px;padding:6px 12px;border-top:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-quaternary)}
+.dshg-dirty{font-size:11px;color:var(--dsw-alias-state-warn-primary)}
+.dshg-savebtn{height:24px;padding:0 12px;flex:none;font-size:11px;gap:5px}
 .dshg-files{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .dshg-files-bar{flex:none;display:flex;align-items:center;gap:3px;padding:5px 8px;border-bottom:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .dshg-files-bar .dshg-mini svg{transform:rotate(90deg)}
@@ -650,6 +724,25 @@ var META_PREFIXES = [
   "Binary files",
   "GIT binary patch"
 ];
+function splitPatchByFile(patch) {
+  const lines = patch.split("\n");
+  const sections = [];
+  let current = null;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      const match = /^diff --git a\/(.*?) b\/(.*)$/.exec(line);
+      const path = match !== null ? match[2] : line.slice("diff --git ".length);
+      current = { path, lines: [] };
+      sections.push(current);
+    }
+    if (current === null) continue;
+    current.lines.push(line);
+  }
+  return sections.map((section) => ({
+    path: section.path,
+    patch: section.lines.join("\n")
+  }));
+}
 function parsePatch(patch) {
   const out = [];
   let oldNo = 0;
@@ -796,40 +889,481 @@ function DiffBodySplit(props) {
   );
 }
 
-// src/client/parts/ConflictPanel.ts
+// src/client/parts/BinaryDiffView.ts
 var React2 = __toESM(require("react"), 1);
-var h = React2.createElement;
+var IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
+function BinaryDiffView(props) {
+  const { cwd, path } = props;
+  const [data, setData] = React2.useState(null);
+  const [error, setError] = React2.useState("");
+  const [loading, setLoading] = React2.useState(IMAGE_RE.test(path));
+  React2.useEffect(() => {
+    if (!IMAGE_RE.test(path)) {
+      setLoading(false);
+      return void 0;
+    }
+    let alive = true;
+    setLoading(true);
+    setError("");
+    setData(null);
+    api.fileContent(cwd, path).then((result) => {
+      if (alive) setData(result);
+    }).catch((err) => {
+      if (alive) setError(err instanceof Error ? err.message : String(err));
+    }).finally(() => {
+      if (alive) setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [cwd, path]);
+  if (!IMAGE_RE.test(path)) {
+    return React2.createElement("div", { className: "dshg-diffempty" }, "\u4E8C\u8FDB\u5236\u6587\u4EF6\uFF0C\u65E0\u6CD5\u4EE5\u6587\u672C\u663E\u793A\u5DEE\u5F02");
+  }
+  if (loading) return React2.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u56FE\u7247\u2026");
+  if (error !== "") return React2.createElement("div", { className: "dshg-diffempty" }, error);
+  if (data !== null && data.mime !== null && data.base64 !== "") {
+    return React2.createElement(
+      "div",
+      { className: "dshg-file-image" },
+      React2.createElement("img", { src: `data:${data.mime};base64,${data.base64}`, alt: path })
+    );
+  }
+  return React2.createElement("div", { className: "dshg-diffempty" }, "\u56FE\u7247\u65E0\u6CD5\u9884\u89C8");
+}
+
+// src/client/parts/CommitDetail.ts
+var React3 = __toESM(require("react"), 1);
+
+// src/client/parts/highlight.ts
+var KEYWORDS = /* @__PURE__ */ new Set([
+  // JS/TS
+  "const",
+  "let",
+  "var",
+  "function",
+  "return",
+  "if",
+  "else",
+  "for",
+  "while",
+  "do",
+  "switch",
+  "case",
+  "break",
+  "continue",
+  "new",
+  "delete",
+  "typeof",
+  "instanceof",
+  "class",
+  "extends",
+  "super",
+  "this",
+  "import",
+  "export",
+  "from",
+  "as",
+  "default",
+  "async",
+  "await",
+  "try",
+  "catch",
+  "finally",
+  "throw",
+  "yield",
+  "in",
+  "of",
+  "interface",
+  "type",
+  "enum",
+  "implements",
+  "public",
+  "private",
+  "protected",
+  "readonly",
+  "static",
+  "abstract",
+  "get",
+  "set",
+  "declare",
+  "namespace",
+  "void",
+  "null",
+  "undefined",
+  "true",
+  "false",
+  // Python
+  "def",
+  "lambda",
+  "pass",
+  "with",
+  "elif",
+  "not",
+  "and",
+  "or",
+  "is",
+  "None",
+  "True",
+  "False",
+  "self",
+  "raise",
+  "global",
+  "nonlocal",
+  // Go / Rust / general
+  "func",
+  "package",
+  "struct",
+  "map",
+  "chan",
+  "go",
+  "defer",
+  "var",
+  "fn",
+  "mut",
+  "impl",
+  "trait",
+  "pub",
+  "use",
+  "mod",
+  "match",
+  "loop",
+  // SQL / shell-ish
+  "select",
+  "from",
+  "where",
+  "insert",
+  "update",
+  "delete",
+  "create",
+  "table"
+]);
+var TYPES = /* @__PURE__ */ new Set([
+  "string",
+  "number",
+  "boolean",
+  "any",
+  "unknown",
+  "never",
+  "object",
+  "symbol",
+  "int",
+  "float",
+  "str",
+  "bool",
+  "byte",
+  "rune",
+  "error",
+  "Promise",
+  "Array",
+  "Record",
+  "Map",
+  "Set"
+]);
+var TOKEN_RE = /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)/g;
+function highlight(line) {
+  const out = [];
+  let last = 0;
+  TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = TOKEN_RE.exec(line)) !== null) {
+    if (match.index > last) out.push({ text: line.slice(last, match.index), kind: "plain" });
+    const raw = match[0];
+    if (match[1] !== void 0) {
+      out.push({ text: raw, kind: raw.startsWith("//") || raw.startsWith("#") || raw.startsWith("/*") ? "comment" : "string" });
+    } else if (match[2] !== void 0) {
+      out.push({ text: raw, kind: "number" });
+    } else {
+      const kind = KEYWORDS.has(raw) ? "keyword" : TYPES.has(raw) ? "type" : lookAheadIsCall(line, match.index + raw.length) ? "func" : "plain";
+      out.push({ text: raw, kind });
+    }
+    last = match.index + raw.length;
+  }
+  if (last < line.length) out.push({ text: line.slice(last), kind: "plain" });
+  return out;
+}
+function lookAheadIsCall(line, index) {
+  let i = index;
+  while (i < line.length && (line[i] === " " || line[i] === "	")) i += 1;
+  return line[i] === "(";
+}
+function languageOf(name2) {
+  const ext = name2.split(".").pop()?.toLowerCase() ?? "";
+  if (["ts", "tsx", "js", "jsx", "mjs", "cjs"].includes(ext)) return "javascript";
+  if (["py", "pyw"].includes(ext)) return "python";
+  if (["go"].includes(ext)) return "go";
+  if (["rs"].includes(ext)) return "rust";
+  if (["json"].includes(ext)) return "json";
+  if (["css", "scss", "less"].includes(ext)) return "css";
+  if (["html", "htm", "xml", "svg"].includes(ext)) return "markup";
+  if (["md", "markdown"].includes(ext)) return "markdown";
+  if (["sh", "bash", "zsh", "ps1", "bat", "cmd"].includes(ext)) return "shell";
+  if (["yml", "yaml"].includes(ext)) return "yaml";
+  if (["sql"].includes(ext)) return "sql";
+  return "text";
+}
+
+// src/client/parts/CommitDetail.ts
+var h = React3.createElement;
 function Icon(props) {
   return h("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" }, h("path", { d: ICONS[props.name], fill: "currentColor" }));
 }
-function CodeBlock(props) {
-  const lines = props.text === "" ? ["\uFF08\u6B64\u4FA7\u6587\u4EF6\u4E0D\u5B58\u5728 \u2014 \u5220\u9664\u51B2\u7A81\uFF09"] : props.text.split("\n");
+function CodeView(props) {
+  const lines = props.text.split("\n");
+  const lang = languageOf(props.name);
   return h(
     "div",
-    { className: `dshg-cf-code dshg-cf-${props.tone}` },
+    { className: `dshg-file-text dshg-lang-${lang}` },
     ...lines.map(
       (line, index) => h(
         "div",
+        { key: index, className: "dshg-file-textline" },
+        h("span", { className: "dshg-snum" }, index + 1),
+        h(
+          "span",
+          { className: "dshg-code" },
+          ...line === "" ? [" "] : highlight(line).map(
+            (token, i) => h("span", { key: i, className: token.kind === "plain" ? void 0 : `dshg-tok-${token.kind}` }, token.text)
+          )
+        )
+      )
+    )
+  );
+}
+function FileAtCommitModal(props) {
+  const { cwd, sha, path, onClose } = props;
+  const [text, setText] = React3.useState("");
+  const [error, setError] = React3.useState("");
+  const [loading, setLoading] = React3.useState(true);
+  React3.useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError("");
+    setText("");
+    api.commitFile(cwd, sha, path).then((result) => {
+      if (alive) setText(result.text);
+    }).catch((err) => {
+      if (alive) setError(err instanceof Error ? err.message : String(err));
+    }).finally(() => {
+      if (alive) setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [cwd, sha, path]);
+  return h(
+    "div",
+    { className: "dshg-fullmask", onClick: onClose },
+    h(
+      "div",
+      { className: "dshg-fullscreen", onClick: (event) => event.stopPropagation() },
+      h(
+        "div",
+        { className: "dshg-diffhead" },
+        h(Icon, { name: "file" }),
+        h("span", { className: "dshg-diffpath", title: path }, path),
+        h("span", { className: "dshg-cmeta-row-inline" }, `${sha.slice(0, 7)} \u65F6\u7684\u5185\u5BB9`),
+        h("span", { className: "dshg-spacer" }),
+        h("button", { type: "button", className: "dshg-mini", title: "\u5173\u95ED", onClick: onClose }, h(Icon, { name: "close" }))
+      ),
+      h(
+        "div",
+        { className: "dshg-diffbody" },
+        loading ? h("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u6587\u4EF6\u2026") : null,
+        !loading && error !== "" ? h("div", { className: "dshg-diffempty" }, error) : null,
+        !loading && error === "" ? h(CodeView, { text, name: path }) : null
+      )
+    )
+  );
+}
+function CommitDetailView(props) {
+  const { cwd, sha, split, onToggleSplit, onClose } = props;
+  const [detail, setDetail] = React3.useState(null);
+  const [error, setError] = React3.useState("");
+  const [loading, setLoading] = React3.useState(true);
+  const [expanded, setExpanded] = React3.useState(/* @__PURE__ */ new Set());
+  const [viewFile, setViewFile] = React3.useState("");
+  React3.useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError("");
+    setDetail(null);
+    setExpanded(/* @__PURE__ */ new Set());
+    api.commitDetail(cwd, sha).then((result) => {
+      if (alive) setDetail(result.commit);
+    }).catch((err) => {
+      if (alive) setError(err instanceof Error ? err.message : String(err));
+    }).finally(() => {
+      if (alive) setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [cwd, sha]);
+  const toggle = (path) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    return next;
+  });
+  const parts = detail === null ? [] : splitPatchByFile(detail.patch);
+  const partByPath = new Map(parts.map((part) => [part.path, part]));
+  const statOf = (path) => detail?.files.find((file) => file.path === path);
+  const rows = [];
+  if (detail !== null) {
+    for (const file of detail.files) rows.push(file.path);
+    for (const part of parts) if (!rows.includes(part.path)) rows.push(part.path);
+  }
+  return h(
+    React3.Fragment,
+    null,
+    h(
+      "div",
+      { className: "dshg-diff dshg-cdetail" },
+      h(
+        "div",
+        { className: "dshg-diffhead" },
+        h(Icon, { name: "commit" }),
+        h("span", { className: "dshg-diffpath" }, `\u63D0\u4EA4 ${sha.slice(0, 7)}`),
+        detail !== null ? h(
+          "span",
+          { className: "dshg-rowstat" },
+          h("span", { className: "dshg-add" }, `+${detail.added}`),
+          h("span", { className: "dshg-del" }, `\u2212${detail.removed}`)
+        ) : null,
+        h("span", { className: "dshg-spacer" }),
+        h(
+          "button",
+          {
+            type: "button",
+            className: "dshg-mini",
+            title: split ? "\u5207\u6362\u4E3A\u884C\u5185\u89C6\u56FE" : "\u5207\u6362\u4E3A\u5E76\u6392\u89C6\u56FE",
+            "aria-pressed": split,
+            onClick: onToggleSplit
+          },
+          h("span", { className: "dshg-viewtoggle" }, split ? "\u5E76\u6392" : "\u884C\u5185")
+        ),
+        h("button", { type: "button", className: "dshg-mini", title: "\u5173\u95ED\uFF08Esc\uFF09", onClick: onClose }, h(Icon, { name: "close" }))
+      ),
+      h(
+        "div",
+        { className: "dshg-diffbody dshg-cdetail-body" },
+        loading ? h("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u63D0\u4EA4\u2026") : null,
+        !loading && error !== "" ? h("div", { className: "dshg-diffempty" }, error) : null,
+        !loading && detail !== null && rows.length === 0 ? h("div", { className: "dshg-diffempty" }, "\u8FD9\u4E2A\u63D0\u4EA4\u6CA1\u6709\u6587\u4EF6\u53D8\u66F4") : null,
+        !loading && detail !== null ? h(
+          React3.Fragment,
+          null,
+          // concise commit header (no wall of chips)
+          h(
+            "div",
+            { className: "dshg-gitlab-head" },
+            h("div", { className: "dshg-gitlab-title" }, detail.subject === "" ? "(no message)" : detail.subject),
+            h(
+              "div",
+              { className: "dshg-gitlab-meta" },
+              h("span", { className: "dshg-gsha" }, detail.short),
+              h("span", null, detail.author),
+              h("span", { title: new Date(detail.time * 1e3).toLocaleString() }, new Date(detail.time * 1e3).toLocaleString()),
+              h("span", { className: "dshg-gitlab-count" }, `${rows.length} \u4E2A\u6587\u4EF6`),
+              h("span", { className: "dshg-add" }, `+${detail.added}`),
+              h("span", { className: "dshg-del" }, `\u2212${detail.removed}`)
+            ),
+            detail.body.trim() === "" ? null : h("pre", { className: "dshg-gitlab-body" }, detail.body.trim())
+          ),
+          // file list
+          h(
+            "div",
+            { className: "dshg-gitlab-files" },
+            ...rows.map((path) => {
+              const stat = statOf(path);
+              const part = partByPath.get(path);
+              const isOpen = expanded.has(path);
+              return h(
+                "div",
+                { key: path, className: `dshg-gitlab-file${isOpen ? " dshg-gitlab-file-open" : ""}` },
+                h(
+                  "div",
+                  { className: "dshg-gitlab-row" },
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "dshg-gitlab-toggle",
+                      title: isOpen ? "\u6536\u8D77\u5DEE\u5F02" : "\u5C55\u5F00\u5DEE\u5F02",
+                      onClick: () => toggle(path)
+                    },
+                    h(Icon, { name: "chevron" })
+                  ),
+                  h(Icon, { name: "file" }),
+                  h("span", { className: "dshg-gitlab-path", title: path }, path),
+                  stat !== void 0 && !stat.binary ? h(
+                    "span",
+                    { className: "dshg-rowstat" },
+                    h("span", { className: "dshg-add" }, `+${stat.added}`),
+                    h("span", { className: "dshg-del" }, `\u2212${stat.removed}`)
+                  ) : stat?.binary ? h("span", { className: "dshg-rowstat" }, "\u4E8C\u8FDB\u5236") : null,
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "dshg-mini dshg-textbtn",
+                      title: "\u67E5\u770B\u8FD9\u4E2A\u63D0\u4EA4\u4E0B\u7684\u5B8C\u6574\u6587\u4EF6\u5185\u5BB9",
+                      onClick: () => setViewFile(path)
+                    },
+                    "\u67E5\u770B\u6587\u4EF6"
+                  )
+                ),
+                isOpen ? h(
+                  "div",
+                  { className: "dshg-gitlab-diff" },
+                  part !== void 0 ? h(split ? DiffBodySplit : DiffBody, { patch: part.patch }) : h("div", { className: "dshg-diffempty" }, "\u4E8C\u8FDB\u5236\u6587\u4EF6\uFF0C\u6CA1\u6709\u6587\u672C\u5DEE\u5F02")
+                ) : null
+              );
+            })
+          ),
+          detail.tooLarge ? h("div", { className: "dshg-diffempty" }, "\u5DEE\u5F02\u8FC7\u5927\uFF0C\u4EC5\u663E\u793A\u524D 60 \u4E07\u5B57\u7B26") : null
+        ) : null
+      )
+    ),
+    viewFile !== "" ? h(FileAtCommitModal, { cwd, sha, path: viewFile, onClose: () => setViewFile("") }) : null
+  );
+}
+
+// src/client/parts/ConflictPanel.ts
+var React4 = __toESM(require("react"), 1);
+var h2 = React4.createElement;
+function Icon2(props) {
+  return h2("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" }, h2("path", { d: ICONS[props.name], fill: "currentColor" }));
+}
+function CodeBlock(props) {
+  const lines = props.text === "" ? ["\uFF08\u6B64\u4FA7\u6587\u4EF6\u4E0D\u5B58\u5728 \u2014 \u5220\u9664\u51B2\u7A81\uFF09"] : props.text.split("\n");
+  return h2(
+    "div",
+    { className: `dshg-cf-code dshg-cf-${props.tone}` },
+    ...lines.map(
+      (line, index) => h2(
+        "div",
         { key: index, className: "dshg-cf-line" },
-        h("span", { className: "dshg-cf-num" }, index + 1),
-        h("span", { className: "dshg-cf-text" }, line === "" ? " " : line)
+        h2("span", { className: "dshg-cf-num" }, index + 1),
+        h2("span", { className: "dshg-cf-text" }, line === "" ? " " : line)
       )
     )
   );
 }
 function ConflictPanel(props) {
   const { cwd, file, onClose, onResolved } = props;
-  const [data, setData] = React2.useState(null);
-  const [error, setError] = React2.useState("");
-  const [loading, setLoading] = React2.useState(true);
-  const [busy, setBusy] = React2.useState("");
-  const [view, setView] = React2.useState("sides");
-  const load = React2.useCallback(() => {
+  const [data, setData] = React4.useState(null);
+  const [error, setError] = React4.useState("");
+  const [loading, setLoading] = React4.useState(true);
+  const [busy, setBusy] = React4.useState("");
+  const [view, setView] = React4.useState("sides");
+  const load = React4.useCallback(() => {
     setLoading(true);
     setError("");
     api.conflicts(cwd, [file]).then((result) => setData(result.conflicts[0] ?? null)).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setLoading(false));
   }, [cwd, file]);
-  React2.useEffect(load, [load]);
+  React4.useEffect(load, [load]);
   const resolve = (side) => {
     setBusy(side);
     setError("");
@@ -838,16 +1372,16 @@ function ConflictPanel(props) {
       onClose();
     }).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setBusy(""));
   };
-  return h(
+  return h2(
     "div",
     { className: "dshg-diff dshg-conflict" },
-    h(
+    h2(
       "div",
       { className: "dshg-diffhead" },
-      h(Icon, { name: "warning" }),
-      h("span", { className: "dshg-diffpath", title: file }, `\u51B2\u7A81\uFF1A${file}`),
-      h("span", { className: "dshg-spacer" }),
-      h(
+      h2(Icon2, { name: "warning" }),
+      h2("span", { className: "dshg-diffpath", title: file }, `\u51B2\u7A81\uFF1A${file}`),
+      h2("span", { className: "dshg-spacer" }),
+      h2(
         "button",
         {
           type: "button",
@@ -855,68 +1389,68 @@ function ConflictPanel(props) {
           title: view === "sides" ? "\u67E5\u770B\u5E26\u6807\u8BB0\u7684\u539F\u6587" : "\u67E5\u770B\u53CC\u65B9\u5BF9\u6BD4",
           onClick: () => setView((prev) => prev === "sides" ? "raw" : "sides")
         },
-        h("span", { className: "dshg-viewtoggle" }, view === "sides" ? "\u53CC\u65B9" : "\u539F\u6587")
+        h2("span", { className: "dshg-viewtoggle" }, view === "sides" ? "\u53CC\u65B9" : "\u539F\u6587")
       ),
-      h("button", { type: "button", className: "dshg-mini", title: "\u5173\u95ED", onClick: onClose }, h(Icon, { name: "close" }))
+      h2("button", { type: "button", className: "dshg-mini", title: "\u5173\u95ED", onClick: onClose }, h2(Icon2, { name: "close" }))
     ),
-    h(
+    h2(
       "div",
       { className: "dshg-cf-actions" },
-      h(
+      h2(
         "button",
         { type: "button", className: "dshg-cf-btn dshg-cf-ours", disabled: busy !== "", onClick: () => resolve("ours") },
         busy === "ours" ? "\u89E3\u51B3\u4E2D\u2026" : "\u91C7\u7528\u5F53\u524D\u5206\u652F\uFF08ours\uFF09"
       ),
-      h(
+      h2(
         "button",
         { type: "button", className: "dshg-cf-btn dshg-cf-theirs", disabled: busy !== "", onClick: () => resolve("theirs") },
         busy === "theirs" ? "\u89E3\u51B3\u4E2D\u2026" : "\u91C7\u7528\u4F20\u5165\u5206\u652F\uFF08theirs\uFF09"
       )
     ),
-    error !== "" ? h("div", { className: "dshg-err" }, error) : null,
-    h(
+    error !== "" ? h2("div", { className: "dshg-err" }, error) : null,
+    h2(
       "div",
       { className: "dshg-diffbody dshg-cf-body" },
-      loading ? h("div", { className: "dshg-diffempty" }, "\u8BFB\u53D6\u51B2\u7A81\u5185\u5BB9\u2026") : null,
-      !loading && data === null && error === "" ? h("div", { className: "dshg-diffempty" }, "\u8FD9\u4E2A\u6587\u4EF6\u5DF2\u7ECF\u6CA1\u6709\u51B2\u7A81\u4E86") : null,
-      !loading && data !== null && view === "sides" ? h(
+      loading ? h2("div", { className: "dshg-diffempty" }, "\u8BFB\u53D6\u51B2\u7A81\u5185\u5BB9\u2026") : null,
+      !loading && data === null && error === "" ? h2("div", { className: "dshg-diffempty" }, "\u8FD9\u4E2A\u6587\u4EF6\u5DF2\u7ECF\u6CA1\u6709\u51B2\u7A81\u4E86") : null,
+      !loading && data !== null && view === "sides" ? h2(
         "div",
         { className: "dshg-cf-sides" },
-        h(
+        h2(
           "div",
           { className: "dshg-cf-col" },
-          h("div", { className: "dshg-cf-head dshg-cf-ours" }, "\u5F53\u524D\u5206\u652F \xB7 ours\uFF08HEAD\uFF09"),
-          h(CodeBlock, { text: data.ours, tone: "ours" })
+          h2("div", { className: "dshg-cf-head dshg-cf-ours" }, "\u5F53\u524D\u5206\u652F \xB7 ours\uFF08HEAD\uFF09"),
+          h2(CodeBlock, { text: data.ours, tone: "ours" })
         ),
-        h(
+        h2(
           "div",
           { className: "dshg-cf-col" },
-          h("div", { className: "dshg-cf-head dshg-cf-theirs" }, "\u4F20\u5165\u5206\u652F \xB7 theirs\uFF08MERGE_HEAD\uFF09"),
-          h(CodeBlock, { text: data.theirs, tone: "theirs" })
+          h2("div", { className: "dshg-cf-head dshg-cf-theirs" }, "\u4F20\u5165\u5206\u652F \xB7 theirs\uFF08MERGE_HEAD\uFF09"),
+          h2(CodeBlock, { text: data.theirs, tone: "theirs" })
         )
       ) : null,
-      !loading && data !== null && view === "raw" ? h(
+      !loading && data !== null && view === "raw" ? h2(
         "div",
         { className: "dshg-cf-col" },
-        h("div", { className: "dshg-cf-head" }, "\u5DE5\u4F5C\u533A\u539F\u6587\uFF08\u542B\u51B2\u7A81\u6807\u8BB0\uFF09"),
-        h(CodeBlock, { text: data.worktree, tone: "raw" })
+        h2("div", { className: "dshg-cf-head" }, "\u5DE5\u4F5C\u533A\u539F\u6587\uFF08\u542B\u51B2\u7A81\u6807\u8BB0\uFF09"),
+        h2(CodeBlock, { text: data.worktree, tone: "raw" })
       ) : null
     )
   );
 }
 
 // src/client/parts/ConfirmDialog.ts
-var React3 = __toESM(require("react"), 1);
+var React5 = __toESM(require("react"), 1);
 function ConfirmDialog(props) {
   const { confirm, onClose } = props;
   const fields = confirm.fields ?? [];
-  const [values, setValues] = React3.useState(() => {
+  const [values, setValues] = React5.useState(() => {
     const initial = {};
     for (const field of fields) initial[field.name] = field.value;
     return initial;
   });
-  const firstRef = React3.useRef(null);
-  React3.useEffect(() => {
+  const firstRef = React5.useRef(null);
+  React5.useEffect(() => {
     firstRef.current?.focus();
     const onKey = (event) => {
       if (event.key === "Escape") {
@@ -933,23 +1467,23 @@ function ConfirmDialog(props) {
     onClose();
     task(values);
   };
-  return React3.createElement(
+  return React5.createElement(
     "div",
     { className: "dshg-confirm-mask", onClick: onClose },
-    React3.createElement(
+    React5.createElement(
       "div",
       { className: "dshg-confirm", onClick: (event) => event.stopPropagation() },
-      React3.createElement("div", { className: "dshg-confirm-title" }, confirm.title),
-      React3.createElement("div", { className: "dshg-confirm-body" }, confirm.body),
-      fields.length > 0 ? React3.createElement(
+      React5.createElement("div", { className: "dshg-confirm-title" }, confirm.title),
+      React5.createElement("div", { className: "dshg-confirm-body" }, confirm.body),
+      fields.length > 0 ? React5.createElement(
         "div",
         { className: "dshg-confirm-fields" },
         ...fields.map(
-          (field, index) => React3.createElement(
+          (field, index) => React5.createElement(
             "label",
             { key: field.name, className: "dshg-confirm-field" },
-            React3.createElement("span", null, field.label),
-            React3.createElement("input", {
+            React5.createElement("span", null, field.label),
+            React5.createElement("input", {
               ref: index === 0 ? firstRef : void 0,
               className: "dshg-input",
               value: values[field.name] ?? "",
@@ -967,11 +1501,11 @@ function ConfirmDialog(props) {
           )
         )
       ) : null,
-      React3.createElement(
+      React5.createElement(
         "div",
         { className: "dshg-confirm-actions" },
-        React3.createElement("button", { type: "button", className: "dshg-ghost", onClick: onClose }, "\u53D6\u6D88"),
-        React3.createElement(
+        React5.createElement("button", { type: "button", className: "dshg-ghost", onClick: onClose }, "\u53D6\u6D88"),
+        React5.createElement(
           "button",
           {
             type: "button",
@@ -986,15 +1520,15 @@ function ConfirmDialog(props) {
 }
 
 // src/client/parts/FileBrowser.ts
-var React5 = __toESM(require("react"), 1);
+var React7 = __toESM(require("react"), 1);
 
 // src/client/parts/Menu.ts
-var React4 = __toESM(require("react"), 1);
+var React6 = __toESM(require("react"), 1);
 function Menu(props) {
   const { x, y, items, onClose, width = 214 } = props;
-  const ref = React4.useRef(null);
-  const [pos, setPos] = React4.useState({ left: x, top: y });
-  React4.useEffect(() => {
+  const ref = React6.useRef(null);
+  const [pos, setPos] = React6.useState({ left: x, top: y });
+  React6.useEffect(() => {
     const node = ref.current;
     if (node === null) return;
     const rect = node.getBoundingClientRect();
@@ -1002,7 +1536,7 @@ function Menu(props) {
     const top = y + rect.height > window.innerHeight - 8 ? Math.max(8, y - rect.height) : y;
     setPos({ left, top });
   }, [x, y]);
-  React4.useEffect(() => {
+  React6.useEffect(() => {
     const onDown = (event) => {
       if (ref.current !== null && !ref.current.contains(event.target)) onClose();
     };
@@ -1020,7 +1554,7 @@ function Menu(props) {
       window.removeEventListener("keydown", onKey, true);
     };
   }, [onClose]);
-  return React4.createElement(
+  return React6.createElement(
     "div",
     {
       ref,
@@ -1030,11 +1564,11 @@ function Menu(props) {
       onContextMenu: (event) => event.preventDefault()
     },
     ...items.map(
-      (item, index) => item.heading === true ? React4.createElement("div", { key: item.id, className: "dshg-menu-head" }, item.label) : React4.createElement(
-        React4.Fragment,
+      (item, index) => item.heading === true ? React6.createElement("div", { key: item.id, className: "dshg-menu-head" }, item.label) : React6.createElement(
+        React6.Fragment,
         { key: item.id },
-        item.separated === true ? React4.createElement("div", { className: "dshg-menu-sep" }) : null,
-        React4.createElement(
+        item.separated === true ? React6.createElement("div", { className: "dshg-menu-sep" }) : null,
+        React6.createElement(
           "button",
           {
             type: "button",
@@ -1047,9 +1581,9 @@ function Menu(props) {
               item.onSelect?.();
             }
           },
-          React4.createElement("span", { className: "dshg-menu-icon" }, item.icon ?? null),
-          React4.createElement("span", { className: "dshg-menu-label" }, item.label),
-          item.hint === void 0 ? null : React4.createElement("span", { className: "dshg-menu-hint" }, item.hint)
+          React6.createElement("span", { className: "dshg-menu-icon" }, item.icon ?? null),
+          React6.createElement("span", { className: "dshg-menu-label" }, item.label),
+          item.hint === void 0 ? null : React6.createElement("span", { className: "dshg-menu-hint" }, item.hint)
         ),
         index === items.length - 1 ? null : null
       )
@@ -1058,9 +1592,9 @@ function Menu(props) {
 }
 
 // src/client/parts/FileBrowser.ts
-var h2 = React5.createElement;
-function Icon2(props) {
-  return h2("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" }, h2("path", { d: ICONS[props.name], fill: "currentColor" }));
+var h3 = React7.createElement;
+function Icon3(props) {
+  return h3("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" }, h3("path", { d: ICONS[props.name], fill: "currentColor" }));
 }
 function fmtSize(size) {
   if (size < 1024) return `${size} B`;
@@ -1093,16 +1627,61 @@ async function copyText(text) {
     }
   }
 }
+function CodeText(props) {
+  const lang = languageOf(props.name);
+  const lines = props.text.split("\n");
+  return h3(
+    "div",
+    { className: `dshg-file-text dshg-lang-${lang}` },
+    ...lines.map(
+      (line, index) => h3(
+        "div",
+        { key: index, className: "dshg-file-textline" },
+        h3("span", { className: "dshg-snum" }, index + 1),
+        h3(
+          "span",
+          { className: "dshg-code" },
+          ...line === "" ? [" "] : highlight(line).map(
+            (token, i) => h3("span", { key: i, className: token.kind === "plain" ? void 0 : `dshg-tok-${token.kind}` }, token.text)
+          )
+        )
+      )
+    )
+  );
+}
 function FilePreviewPane(props) {
   const { cwd, file, onNotice, onClose } = props;
-  const [data, setData] = React5.useState(null);
-  const [error, setError] = React5.useState("");
-  const [loading, setLoading] = React5.useState(true);
-  React5.useEffect(() => {
+  const [data, setData] = React7.useState(null);
+  const [error, setError] = React7.useState("");
+  const [loading, setLoading] = React7.useState(true);
+  const [fullscreen, setFullscreen] = React7.useState(false);
+  const [editing, setEditing] = React7.useState(false);
+  const [draft, setDraft] = React7.useState("");
+  const [saving, setSaving] = React7.useState(false);
+  const [dirty, setDirty] = React7.useState(false);
+  const [showChanges, setShowChanges] = React7.useState(false);
+  const [diffPatch, setDiffPatch] = React7.useState("");
+  const [diffLoading, setDiffLoading] = React7.useState(false);
+  React7.useEffect(() => {
+    if (!editing) return void 0;
+    const onKey = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (dirty && !saving) save();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [editing, dirty, saving, draft]);
+  React7.useEffect(() => {
     let alive = true;
     setLoading(true);
     setError("");
     setData(null);
+    setShowChanges(false);
+    setFullscreen(false);
+    setEditing(false);
+    setDirty(false);
     api.fileContent(cwd, file.path).then((result) => {
       if (alive) setData(result);
     }).catch((err) => {
@@ -1114,71 +1693,191 @@ function FilePreviewPane(props) {
       alive = false;
     };
   }, [cwd, file.path]);
+  const loadChanges = () => {
+    setShowChanges(true);
+    setDiffLoading(true);
+    setDiffPatch("");
+    api.diff(cwd, file.path, false, "").then((result) => setDiffPatch(result.patch ?? "")).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setDiffLoading(false));
+  };
+  const startEdit = () => {
+    if (data === null || data.text === null) return;
+    setDraft(data.text);
+    setDirty(false);
+    setEditing(true);
+  };
+  const save = () => {
+    if (!dirty) return;
+    setSaving(true);
+    setError("");
+    api.writeFile(cwd, file.path, draft).then((result) => {
+      setDirty(false);
+      setData((prev) => prev === null ? prev : { ...prev, text: draft, size: result.size });
+      onNotice(`\u5DF2\u4FDD\u5B58 ${file.name}`);
+    }).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setSaving(false));
+  };
+  const image = () => h3("div", { className: "dshg-file-image" }, h3("img", { src: `data:${data?.mime};base64,${data?.base64}`, alt: file.name }));
   const body = () => {
-    if (loading) return h2("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u6587\u4EF6\u2026");
-    if (error !== "") return h2("div", { className: "dshg-diffempty" }, error);
-    if (data === null) return h2("div", { className: "dshg-diffempty" }, "\u6CA1\u6709\u5185\u5BB9");
+    if (loading) return h3("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u6587\u4EF6\u2026");
+    if (error !== "") return h3("div", { className: "dshg-diffempty" }, error);
+    if (data === null) return h3("div", { className: "dshg-diffempty" }, "\u6CA1\u6709\u5185\u5BB9");
     if (data.tooLarge) {
-      return h2("div", { className: "dshg-diffempty" }, `\u6587\u4EF6\u592A\u5927\uFF08${fmtSize(data.size)}\uFF09\uFF0C\u65E0\u6CD5\u5728\u63D2\u4EF6\u5185\u9884\u89C8`);
+      return h3("div", { className: "dshg-diffempty" }, `\u6587\u4EF6\u592A\u5927\uFF08${fmtSize(data.size)}\uFF09\uFF0C\u65E0\u6CD5\u5728\u63D2\u4EF6\u5185\u9884\u89C8`);
     }
     if (data.binary) {
-      return h2("div", { className: "dshg-diffempty" }, "\u4E8C\u8FDB\u5236\u6587\u4EF6\uFF0C\u65E0\u6CD5\u9884\u89C8\u5185\u5BB9");
+      return h3("div", { className: "dshg-diffempty" }, "\u4E8C\u8FDB\u5236\u6587\u4EF6\uFF0C\u65E0\u6CD5\u9884\u89C8\u5185\u5BB9");
     }
-    if (data.mime !== null && data.base64 !== "") {
-      return h2(
-        "div",
-        { className: "dshg-file-image" },
-        h2("img", { src: `data:${data.mime};base64,${data.base64}`, alt: file.name })
-      );
+    if (data.mime !== null && data.base64 !== "") return image();
+    if (showChanges) {
+      return diffLoading ? h3("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u53D8\u66F4\u2026") : h3(DiffBody, { patch: diffPatch, empty: "\u8FD9\u4E2A\u6587\u4EF6\u6CA1\u6709\u672A\u63D0\u4EA4\u7684\u53D8\u66F4" });
     }
-    if (data.text !== null) {
-      const lines = data.text.split("\n");
-      return h2(
-        "div",
-        { className: "dshg-file-text" },
-        ...lines.map(
-          (line, index) => h2(
-            "div",
-            { key: index, className: "dshg-file-textline" },
-            h2("span", { className: "dshg-snum" }, index + 1),
-            h2("span", { className: "dshg-code" }, line === "" ? " " : line)
-          )
-        )
-      );
-    }
-    return h2("div", { className: "dshg-diffempty" }, "\u6CA1\u6709\u53EF\u9884\u89C8\u7684\u5185\u5BB9");
+    if (data.text !== null) return h3(CodeText, { text: data.text, name: file.name });
+    return h3("div", { className: "dshg-diffempty" }, "\u6CA1\u6709\u53EF\u9884\u89C8\u7684\u5185\u5BB9");
   };
-  return h2(
+  const canShowChanges = data !== null && data.mime === null && !data.binary && !data.tooLarge;
+  const canFullscreen = data !== null && !data.binary && !data.tooLarge;
+  const canEdit = data !== null && !data.binary && !data.tooLarge && data.mime === null && data.text !== null;
+  const header = (inFullscreen) => h3(
     "div",
-    { className: "dshg-diff dshg-filepreview" },
-    h2(
-      "div",
-      { className: "dshg-diffhead" },
-      h2(Icon2, { name: file.isImage ? "spark" : "file" }),
-      h2("span", { className: "dshg-diffpath", title: file.path }, file.name),
-      h2("span", { className: "dshg-spacer" }),
-      h2(
-        "button",
-        { type: "button", className: "dshg-mini", title: "\u7528\u7CFB\u7EDF\u9ED8\u8BA4\u5E94\u7528\u6253\u5F00", onClick: () => {
-          void api.openPath(cwd, file.path, false).catch((err) => onNotice(err instanceof Error ? err.message : String(err)));
-        } },
-        h2(Icon2, { name: "folder" })
-      ),
-      h2("button", { type: "button", className: "dshg-mini", title: "\u5173\u95ED\u9884\u89C8", onClick: onClose }, h2(Icon2, { name: "close" }))
+    { className: "dshg-diffhead" },
+    h3(Icon3, { name: file.isImage ? "spark" : "file" }),
+    h3("span", { className: "dshg-diffpath", title: file.path }, file.name),
+    h3("span", { className: "dshg-spacer" }),
+    canShowChanges ? h3(
+      "button",
+      {
+        type: "button",
+        className: "dshg-mini dshg-textbtn",
+        title: "\u67E5\u770B\u8FD9\u4E2A\u6587\u4EF6\u672A\u63D0\u4EA4\u7684\u53D8\u66F4",
+        onClick: () => {
+          if (showChanges) setShowChanges(false);
+          else loadChanges();
+        }
+      },
+      showChanges ? "\u67E5\u770B\u6587\u4EF6" : "\u67E5\u770B\u53D8\u66F4"
+    ) : null,
+    canEdit && !inFullscreen ? h3(
+      "button",
+      {
+        type: "button",
+        className: "dshg-mini dshg-textbtn",
+        title: "\u7F16\u8F91\u8FD9\u4E2A\u6587\u4EF6",
+        onClick: startEdit
+      },
+      h3(Icon3, { name: "edit" }),
+      "\u7F16\u8F91"
+    ) : null,
+    canFullscreen && !inFullscreen ? h3(
+      "button",
+      {
+        type: "button",
+        className: "dshg-mini dshg-textbtn",
+        title: "\u5168\u5C4F\u663E\u793A",
+        onClick: () => setFullscreen(true)
+      },
+      h3(Icon3, { name: "maximize" }),
+      "\u5168\u5C4F\u663E\u793A"
+    ) : null,
+    h3(
+      "button",
+      { type: "button", className: "dshg-mini", title: "\u7528\u7CFB\u7EDF\u9ED8\u8BA4\u5E94\u7528\u6253\u5F00", onClick: () => {
+        void api.openPath(cwd, file.path, false).catch((err) => onNotice(err instanceof Error ? err.message : String(err)));
+      } },
+      h3(Icon3, { name: "folder" })
     ),
-    h2("div", { className: "dshg-diffbody" }, body())
+    h3(
+      "button",
+      { type: "button", className: "dshg-mini", title: inFullscreen ? "\u5173\u95ED\u5168\u5C4F" : "\u5173\u95ED\u9884\u89C8", onClick: inFullscreen ? () => setFullscreen(false) : onClose },
+      h3(Icon3, { name: "close" })
+    )
+  );
+  return h3(
+    React7.Fragment,
+    null,
+    h3(
+      "div",
+      { className: "dshg-diff dshg-filepreview" },
+      header(false),
+      h3("div", { className: "dshg-diffbody" }, body())
+    ),
+    fullscreen ? h3(
+      "div",
+      { className: "dshg-fullmask", onClick: () => setFullscreen(false) },
+      h3(
+        "div",
+        { className: "dshg-fullscreen", onClick: (event) => event.stopPropagation() },
+        header(true),
+        h3("div", { className: "dshg-diffbody" }, body())
+      )
+    ) : null,
+    editing ? h3(
+      "div",
+      {
+        className: "dshg-fullmask",
+        onClick: () => setEditing(false)
+      },
+      h3(
+        "div",
+        { className: "dshg-fullscreen dshg-editwin", onClick: (event) => event.stopPropagation() },
+        h3(
+          "div",
+          { className: "dshg-diffhead" },
+          h3(Icon3, { name: "edit" }),
+          h3("span", { className: "dshg-diffpath", title: file.path }, `\u7F16\u8F91 ${file.name}`),
+          dirty ? h3("span", { className: "dshg-dirty" }, "\u25CF \u672A\u4FDD\u5B58") : null,
+          h3("span", { className: "dshg-spacer" }),
+          h3(
+            "button",
+            {
+              type: "button",
+              className: "dshg-primary dshg-savebtn",
+              disabled: saving || !dirty,
+              onClick: save
+            },
+            h3(Icon3, { name: "check" }),
+            saving ? "\u4FDD\u5B58\u4E2D\u2026" : "\u4FDD\u5B58"
+          ),
+          h3(
+            "button",
+            {
+              type: "button",
+              className: "dshg-mini",
+              title: "\u5173\u95ED",
+              onClick: () => setEditing(false)
+            },
+            h3(Icon3, { name: "close" })
+          )
+        ),
+        error !== "" ? h3("div", { className: "dshg-err" }, error) : null,
+        h3("textarea", {
+          className: "dshg-editor",
+          value: draft,
+          spellCheck: false,
+          onChange: (event) => {
+            setDraft(event.target.value);
+            setDirty(true);
+          }
+        }),
+        h3(
+          "div",
+          { className: "dshg-editfoot" },
+          `${draft.split("\n").length} \u884C`,
+          h3("span", { className: "dshg-spacer" }),
+          dirty ? "Ctrl+S \u4FDD\u5B58" : "\u6CA1\u6709\u672A\u4FDD\u5B58\u7684\u4FEE\u6539"
+        )
+      )
+    ) : null
   );
 }
 function FileBrowser(props) {
   const { cwd, active, onHistory, onNotice } = props;
-  const [dir, setDir] = React5.useState("");
-  const [data, setData] = React5.useState(null);
-  const [error, setError] = React5.useState("");
-  const [loading, setLoading] = React5.useState(true);
-  const [menu, setMenu] = React5.useState(null);
-  const [preview, setPreview] = React5.useState(null);
-  const [listWidth, setListWidth] = React5.useState(null);
-  const dragRef = React5.useRef(null);
+  const [dir, setDir] = React7.useState("");
+  const [data, setData] = React7.useState(null);
+  const [error, setError] = React7.useState("");
+  const [loading, setLoading] = React7.useState(true);
+  const [menu, setMenu] = React7.useState(null);
+  const [preview, setPreview] = React7.useState(null);
+  const [listWidth, setListWidth] = React7.useState(null);
+  const dragRef = React7.useRef(null);
   const startDrag = (event) => {
     const wrap = event.currentTarget.parentElement;
     if (wrap === null) return;
@@ -1194,7 +1893,7 @@ function FileBrowser(props) {
   const endDrag = () => {
     dragRef.current = null;
   };
-  const load = React5.useCallback(
+  const load = React7.useCallback(
     (target) => {
       setLoading(true);
       setError("");
@@ -1205,7 +1904,7 @@ function FileBrowser(props) {
     },
     [cwd]
   );
-  React5.useEffect(() => {
+  React7.useEffect(() => {
     load("");
   }, [load]);
   const up = () => {
@@ -1236,7 +1935,7 @@ function FileBrowser(props) {
         {
           id: "open",
           label: entry.kind === "dir" ? "\u8FDB\u5165\u6587\u4EF6\u5939" : "\u67E5\u770B\u6587\u4EF6\u5185\u5BB9",
-          icon: h2(Icon2, { name: "file" }),
+          icon: h3(Icon3, { name: "file" }),
           onSelect: () => openEntry(entry)
         },
         {
@@ -1255,7 +1954,7 @@ function FileBrowser(props) {
         {
           id: "copy",
           label: "\u590D\u5236\u8DEF\u5F84",
-          icon: h2(Icon2, { name: "branch" }),
+          icon: h3(Icon3, { name: "branch" }),
           onSelect: () => {
             void copyText(entry.path).then((ok) => onNotice(ok ? "\u5DF2\u590D\u5236\u5B8C\u6574\u8DEF\u5F84" : "\u590D\u5236\u5931\u8D25"));
           }
@@ -1271,7 +1970,7 @@ function FileBrowser(props) {
           id: "history",
           label: "\u663E\u793A Git \u5386\u53F2",
           separated: true,
-          icon: h2(Icon2, { name: "history" }),
+          icon: h3(Icon3, { name: "history" }),
           onSelect: () => onHistory(entry.rel)
         },
         {
@@ -1289,27 +1988,27 @@ function FileBrowser(props) {
   };
   const crumbs = dir === "" ? [] : dir.split("/").filter(Boolean);
   const selectedRel = preview?.path ?? "";
-  return h2(
+  return h3(
     "div",
     { className: "dshg-files-wrap" },
-    h2(
+    h3(
       "div",
       { className: "dshg-files", style: listWidth === null ? void 0 : { flex: `0 0 ${listWidth}px` } },
-      h2(
+      h3(
         "div",
         { className: "dshg-files-bar" },
-        h2(
+        h3(
           "button",
           { type: "button", className: "dshg-mini", title: "\u8FD4\u56DE\u4E0A\u7EA7", disabled: dir === "", onClick: up },
-          h2(Icon2, { name: "chevron" })
+          h3(Icon3, { name: "chevron" })
         ),
-        h2("span", { className: "dshg-files-root", title: cwd, onClick: () => load("") }, "\u4ED3\u5E93"),
+        h3("span", { className: "dshg-files-root", title: cwd, onClick: () => load("") }, "\u4ED3\u5E93"),
         ...crumbs.map(
-          (crumb, index) => h2(
-            React5.Fragment,
+          (crumb, index) => h3(
+            React7.Fragment,
             { key: `${crumb}-${index}` },
-            h2("span", { className: "dshg-files-sep" }, "/"),
-            h2(
+            h3("span", { className: "dshg-files-sep" }, "/"),
+            h3(
               "span",
               {
                 className: "dshg-files-crumb",
@@ -1319,21 +2018,21 @@ function FileBrowser(props) {
             )
           )
         ),
-        h2("span", { className: "dshg-spacer" }),
-        h2(
+        h3("span", { className: "dshg-spacer" }),
+        h3(
           "button",
           { type: "button", className: "dshg-mini", title: "\u5237\u65B0", onClick: () => load(dir) },
-          h2(Icon2, { name: "refresh" })
+          h3(Icon3, { name: "refresh" })
         )
       ),
-      error !== "" ? h2("div", { className: "dshg-err" }, error) : null,
-      h2(
+      error !== "" ? h3("div", { className: "dshg-err" }, error) : null,
+      h3(
         "div",
         { className: "dshg-files-list" },
-        loading ? h2("div", { className: "dshg-loading" }, "\u8BFB\u53D6\u6587\u4EF6\u2026") : null,
-        !loading && data !== null && data.entries.length === 0 ? h2("div", { className: "dshg-diffempty" }, "\u8FD9\u4E2A\u6587\u4EF6\u5939\u662F\u7A7A\u7684") : null,
+        loading ? h3("div", { className: "dshg-loading" }, "\u8BFB\u53D6\u6587\u4EF6\u2026") : null,
+        !loading && data !== null && data.entries.length === 0 ? h3("div", { className: "dshg-diffempty" }, "\u8FD9\u4E2A\u6587\u4EF6\u5939\u662F\u7A7A\u7684") : null,
         !loading && data !== null ? data.entries.map(
-          (entry) => h2(
+          (entry) => h3(
             "div",
             {
               key: entry.path,
@@ -1351,24 +2050,24 @@ function FileBrowser(props) {
                 }
               }
             },
-            h2(
+            h3(
               "span",
               { className: "dshg-fileicon" },
-              h2(Icon2, { name: entry.kind === "dir" ? "folder" : "file" })
+              h3(Icon3, { name: entry.kind === "dir" ? "folder" : "file" })
             ),
-            h2("span", { className: "dshg-filename" }, entry.name),
-            h2(
+            h3("span", { className: "dshg-filename" }, entry.name),
+            h3(
               "span",
               { className: "dshg-filemeta" },
               entry.kind === "dir" ? "\u6587\u4EF6\u5939" : fmtSize(entry.size)
             ),
-            h2("span", { className: "dshg-filetime" }, fmtTime(entry.mtime))
+            h3("span", { className: "dshg-filetime" }, fmtTime(entry.mtime))
           )
         ) : null
       ),
-      menu !== null ? h2(Menu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) }) : null
+      menu !== null ? h3(Menu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) }) : null
     ),
-    h2("div", {
+    h3("div", {
       className: "dshg-files-split",
       title: "\u62D6\u52A8\u8C03\u6574\u5BBD\u5EA6",
       onPointerDown: startDrag,
@@ -1376,7 +2075,7 @@ function FileBrowser(props) {
       onPointerUp: endDrag,
       onPointerCancel: endDrag
     }),
-    preview !== null ? h2(FilePreviewPane, {
+    preview !== null ? h3(FilePreviewPane, {
       cwd,
       file: preview,
       onNotice,
@@ -1386,8 +2085,8 @@ function FileBrowser(props) {
 }
 
 // src/client/parts/Terminal.ts
-var React6 = __toESM(require("react"), 1);
-var h3 = React6.createElement;
+var React8 = __toESM(require("react"), 1);
+var h4 = React8.createElement;
 var SUGGESTIONS = [
   "git status -sb",
   "git log --oneline --graph --all -20",
@@ -1395,21 +2094,21 @@ var SUGGESTIONS = [
   "git diff --stat",
   "git branch -vv"
 ];
-function Icon3(props) {
-  return h3("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" }, h3("path", { d: ICONS[props.name], fill: "currentColor" }));
+function Icon4(props) {
+  return h4("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" }, h4("path", { d: ICONS[props.name], fill: "currentColor" }));
 }
 function Terminal(props) {
   const { cwd, active } = props;
-  const [entries, setEntries] = React6.useState([]);
-  const [line, setLine] = React6.useState("");
-  const [busy, setBusy] = React6.useState(false);
-  const [runCwd, setRunCwd] = React6.useState(cwd);
-  const [history, setHistory] = React6.useState([]);
-  const [historyAt, setHistoryAt] = React6.useState(-1);
-  const seq = React6.useRef(0);
-  const scrollRef = React6.useRef(null);
-  const inputRef = React6.useRef(null);
-  React6.useEffect(() => {
+  const [entries, setEntries] = React8.useState([]);
+  const [line, setLine] = React8.useState("");
+  const [busy, setBusy] = React8.useState(false);
+  const [runCwd, setRunCwd] = React8.useState(cwd);
+  const [history, setHistory] = React8.useState([]);
+  const [historyAt, setHistoryAt] = React8.useState(-1);
+  const seq = React8.useRef(0);
+  const scrollRef = React8.useRef(null);
+  const inputRef = React8.useRef(null);
+  React8.useEffect(() => {
     setEntries([
       { id: ++seq.current, kind: "notice", text: "\u4ED3\u5E93\u6839\u76EE\u5F55\u5DF2\u5C31\u7EEA\uFF0C\u8F93\u5165 git \u547D\u4EE4\u56DE\u8F66\u6267\u884C\uFF08\u2191\u2193 \u7FFB\u5386\u53F2\uFF0CCtrl+L \u6E05\u5C4F\uFF09\u3002" }
     ]);
@@ -1418,12 +2117,12 @@ function Terminal(props) {
     setHistory([]);
     setHistoryAt(-1);
   }, [cwd]);
-  React6.useEffect(() => {
+  React8.useEffect(() => {
     if (!active) return;
     const node = scrollRef.current;
     if (node !== null) node.scrollTop = node.scrollHeight;
   }, [entries, active]);
-  React6.useEffect(() => {
+  React8.useEffect(() => {
     if (active) inputRef.current?.focus();
   }, [active]);
   const submit = (raw) => {
@@ -1494,17 +2193,17 @@ function Terminal(props) {
       setEntries([]);
     }
   };
-  return h3(
+  return h4(
     "div",
     { className: "dshg-term" },
-    h3(
+    h4(
       "div",
       { className: "dshg-term-bar" },
-      h3(Icon3, { name: "terminal" }),
-      h3("span", { className: "dshg-term-title" }, "Git \u7EC8\u7AEF"),
-      h3("span", { className: "dshg-term-cwd", title: runCwd }, runCwd),
-      h3("span", { className: "dshg-spacer" }),
-      h3(
+      h4(Icon4, { name: "terminal" }),
+      h4("span", { className: "dshg-term-title" }, "Git \u7EC8\u7AEF"),
+      h4("span", { className: "dshg-term-cwd", title: runCwd }, runCwd),
+      h4("span", { className: "dshg-spacer" }),
+      h4(
         "button",
         {
           type: "button",
@@ -1512,31 +2211,31 @@ function Terminal(props) {
           title: "\u6E05\u5C4F\uFF08Ctrl+L\uFF09",
           onClick: () => setEntries([])
         },
-        h3(Icon3, { name: "close" })
+        h4(Icon4, { name: "close" })
       )
     ),
-    h3(
+    h4(
       "div",
       { className: "dshg-term-log", ref: scrollRef, onClick: () => inputRef.current?.focus() },
       ...entries.map(
-        (entry) => entry.kind === "input" ? h3(
+        (entry) => entry.kind === "input" ? h4(
           "div",
           { key: entry.id, className: "dshg-term-line dshg-term-input" },
-          h3("span", { className: "dshg-term-prompt" }, "\u276F"),
-          h3("span", { className: "dshg-term-cmd" }, entry.text)
-        ) : h3(
+          h4("span", { className: "dshg-term-prompt" }, "\u276F"),
+          h4("span", { className: "dshg-term-cmd" }, entry.text)
+        ) : h4(
           "pre",
           { key: entry.id, className: `dshg-term-line dshg-term-${entry.kind}` },
           entry.text
         )
       ),
-      busy ? h3("div", { className: "dshg-term-line dshg-term-notice" }, "\u6267\u884C\u4E2D\u2026") : null
+      busy ? h4("div", { className: "dshg-term-line dshg-term-notice" }, "\u6267\u884C\u4E2D\u2026") : null
     ),
-    h3(
+    h4(
       "div",
       { className: "dshg-term-suggest" },
       ...SUGGESTIONS.map(
-        (suggestion) => h3(
+        (suggestion) => h4(
           "button",
           {
             key: suggestion,
@@ -1549,11 +2248,11 @@ function Terminal(props) {
         )
       )
     ),
-    h3(
+    h4(
       "div",
       { className: "dshg-term-inputrow" },
-      h3("span", { className: "dshg-term-prompt" }, "\u276F"),
-      h3("input", {
+      h4("span", { className: "dshg-term-prompt" }, "\u276F"),
+      h4("input", {
         ref: inputRef,
         className: "dshg-term-field",
         value: line,
@@ -1564,7 +2263,7 @@ function Terminal(props) {
         onChange: (event) => setLine(event.target.value),
         onKeyDown
       }),
-      h3(
+      h4(
         "button",
         {
           type: "button",
@@ -1597,11 +2296,11 @@ function removeStyles() {
   const tag = document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`);
   if (tag !== null) tag.remove();
 }
-function Icon4(props) {
-  return React7.createElement(
+function Icon5(props) {
+  return React9.createElement(
     "svg",
     { viewBox: "0 0 16 16", "aria-hidden": "true", focusable: "false" },
-    React7.createElement("path", { d: ICONS[props.name], fill: "currentColor" })
+    React9.createElement("path", { d: ICONS[props.name], fill: "currentColor" })
   );
 }
 function splitPath(raw) {
@@ -1621,12 +2320,6 @@ function relativeTime(seconds) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${date.getFullYear()}-${month}-${day}`;
-}
-function absoluteTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "";
-  const date = new Date(seconds * 1e3);
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 function refKind(ref) {
   if (/^tag: /i.test(ref)) return "tag";
@@ -1664,7 +2357,7 @@ function GraphLanes(props) {
   const children = [];
   for (const pass of row.passThrough) {
     children.push(
-      React7.createElement("line", {
+      React9.createElement("line", {
         key: `v${pass.lane}`,
         x1: cx(pass.lane),
         y1: 0,
@@ -1678,7 +2371,7 @@ function GraphLanes(props) {
   }
   if (row.fromTop) {
     children.push(
-      React7.createElement("line", {
+      React9.createElement("line", {
         key: "up",
         x1: cx(row.lane),
         y1: 0,
@@ -1692,7 +2385,7 @@ function GraphLanes(props) {
   }
   if (row.toBottom) {
     children.push(
-      React7.createElement("line", {
+      React9.createElement("line", {
         key: "down",
         x1: cx(row.lane),
         y1: mid,
@@ -1709,7 +2402,7 @@ function GraphLanes(props) {
     const x1 = cx(row.lane);
     const x2 = cx(merge.lane);
     children.push(
-      React7.createElement("path", {
+      React9.createElement("path", {
         key: `m${merge.lane}`,
         d: `M ${x1} ${mid} C ${x1} ${mid + ROW_H / 3}, ${x2} ${ROW_H - ROW_H / 3}, ${x2} ${ROW_H}`,
         fill: "none",
@@ -1720,7 +2413,7 @@ function GraphLanes(props) {
     );
   }
   children.push(
-    React7.createElement("circle", {
+    React9.createElement("circle", {
       key: "node",
       cx: cx(row.lane),
       cy: mid,
@@ -1730,18 +2423,18 @@ function GraphLanes(props) {
       strokeWidth: 2
     })
   );
-  return React7.createElement(
+  return React9.createElement(
     "svg",
     { className: "dshg-gsvg", width, height: ROW_H, viewBox: `0 0 ${width} ${ROW_H}`, "aria-hidden": "true" },
     ...children
   );
 }
 function useRepoState(cwd, open) {
-  const [state, setState] = React7.useState(null);
-  const [loading, setLoading] = React7.useState(false);
-  const [error, setError] = React7.useState("");
-  const seq = React7.useRef(0);
-  const load = React7.useCallback(
+  const [state, setState] = React9.useState(null);
+  const [loading, setLoading] = React9.useState(false);
+  const [error, setError] = React9.useState("");
+  const seq = React9.useRef(0);
+  const load = React9.useCallback(
     (quiet) => {
       if (cwd === "") return;
       const mine = ++seq.current;
@@ -1760,125 +2453,23 @@ function useRepoState(cwd, open) {
     },
     [cwd]
   );
-  React7.useEffect(() => {
+  React9.useEffect(() => {
     load(false);
   }, [load]);
-  React7.useEffect(() => {
+  React9.useEffect(() => {
     if (!open) return void 0;
     const timer = setInterval(() => load(true), AUTO_REFRESH_MS);
     return () => clearInterval(timer);
   }, [open, load]);
   return { state, loading, error, refresh: load };
 }
-function CommitDetailView(props) {
-  const { cwd, sha, split, onClose } = props;
-  const [detail, setDetail] = React7.useState(null);
-  const [error, setError] = React7.useState("");
-  const [loading, setLoading] = React7.useState(true);
-  React7.useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError("");
-    setDetail(null);
-    api.commitDetail(cwd, sha).then((result) => {
-      if (alive) setDetail(result.commit);
-    }).catch((err) => {
-      if (alive) setError(err instanceof Error ? err.message : String(err));
-    }).finally(() => {
-      if (alive) setLoading(false);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [cwd, sha]);
-  const meta = () => {
-    if (detail === null) return null;
-    return React7.createElement(
-      "div",
-      { className: "dshg-cmeta" },
-      React7.createElement("div", { className: "dshg-cmeta-subject" }, detail.subject === "" ? "(no message)" : detail.subject),
-      React7.createElement(
-        "div",
-        { className: "dshg-cmeta-row" },
-        React7.createElement("span", { className: "dshg-gsha" }, detail.short),
-        React7.createElement("span", null, detail.author),
-        React7.createElement("span", { title: absoluteTime(detail.time) }, relativeTime(detail.time)),
-        detail.parents.length > 1 ? React7.createElement("span", { className: "dshg-gref", "data-kind": "remote" }, `merge \xB7 ${detail.parents.length} parents`) : null
-      ),
-      detail.body.trim() === "" ? null : React7.createElement("pre", { className: "dshg-cmeta-body" }, detail.body.trim()),
-      React7.createElement(
-        "div",
-        { className: "dshg-cmeta-files" },
-        ...detail.files.map(
-          (file) => React7.createElement(
-            "span",
-            { key: `${file.path}:${file.from}`, className: "dshg-cfile", title: file.from === "" ? file.path : `${file.from} \u2192 ${file.path}` },
-            React7.createElement("span", { className: "dshg-cfile-name" }, file.path),
-            file.binary ? React7.createElement("span", { className: "dshg-rowstat" }, "bin") : React7.createElement(
-              "span",
-              { className: "dshg-rowstat" },
-              React7.createElement("span", { className: "dshg-add" }, `+${file.added}`),
-              React7.createElement("span", { className: "dshg-del" }, `\u2212${file.removed}`)
-            )
-          )
-        )
-      )
-    );
-  };
-  return React7.createElement(
-    "div",
-    { className: "dshg-diff dshg-cdetail" },
-    React7.createElement(
-      "div",
-      { className: "dshg-diffhead" },
-      React7.createElement(Icon4, { name: "commit" }),
-      React7.createElement("span", { className: "dshg-diffpath" }, `\u63D0\u4EA4 ${sha.slice(0, 7)}`),
-      detail !== null ? React7.createElement(
-        "span",
-        { className: "dshg-rowstat" },
-        React7.createElement("span", { className: "dshg-add" }, `+${detail.added}`),
-        React7.createElement("span", { className: "dshg-del" }, `\u2212${detail.removed}`)
-      ) : null,
-      React7.createElement("span", { className: "dshg-spacer" }),
-      React7.createElement(
-        "button",
-        {
-          type: "button",
-          className: "dshg-mini",
-          title: split ? "\u5207\u6362\u4E3A\u884C\u5185\u89C6\u56FE" : "\u5207\u6362\u4E3A\u5E76\u6392\u89C6\u56FE",
-          "aria-pressed": split,
-          onClick: () => props.onToggleSplit()
-        },
-        React7.createElement("span", { className: "dshg-viewtoggle" }, split ? "\u5E76\u6392" : "\u884C\u5185")
-      ),
-      React7.createElement(
-        "button",
-        { type: "button", className: "dshg-mini", title: "\u5173\u95ED\uFF08Esc\uFF09", onClick: onClose },
-        React7.createElement(Icon4, { name: "close" })
-      )
-    ),
-    React7.createElement(
-      "div",
-      { className: `dshg-diffbody${split ? " dshg-diffbody-split" : ""}` },
-      loading ? React7.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u63D0\u4EA4\u2026") : null,
-      !loading && error !== "" ? React7.createElement("div", { className: "dshg-diffempty" }, error) : null,
-      !loading && detail !== null ? React7.createElement(
-        React7.Fragment,
-        null,
-        meta(),
-        React7.createElement(split ? DiffBodySplit : DiffBody, { patch: detail.patch, empty: "\u8FD9\u4E2A\u63D0\u4EA4\u6CA1\u6709\u6587\u672C\u5DEE\u5F02" }),
-        detail.tooLarge ? React7.createElement("div", { className: "dshg-diffempty" }, "\u5DEE\u5F02\u8FC7\u5927\uFF0C\u4EC5\u663E\u793A\u524D 60 \u4E07\u5B57\u7B26") : null
-      ) : null
-    )
-  );
-}
 function BranchPicker(props) {
   const { cwd, current, onClose, onSwitched, x, y } = props;
-  const [list, setList] = React7.useState(null);
-  const [error, setError] = React7.useState("");
-  const [filter, setFilter] = React7.useState("");
-  const [newName, setNewName] = React7.useState("");
-  React7.useEffect(() => {
+  const [list, setList] = React9.useState(null);
+  const [error, setError] = React9.useState("");
+  const [filter, setFilter] = React9.useState("");
+  const [newName, setNewName] = React9.useState("");
+  React9.useEffect(() => {
     let alive = true;
     api.branches(cwd).then((result) => {
       if (alive) setList(result.branches);
@@ -1898,7 +2489,7 @@ function BranchPicker(props) {
   const filtered = (list ?? []).filter((branch) => filter === "" || branch.name.toLowerCase().includes(filter.toLowerCase()));
   const local = filtered.filter((branch) => !branch.remote);
   const remote = filtered.filter((branch) => branch.remote);
-  return React7.createElement(
+  return React9.createElement(
     "div",
     {
       className: "dshg-menu dshg-branchpicker",
@@ -1906,8 +2497,8 @@ function BranchPicker(props) {
       role: "dialog",
       "aria-label": "\u5207\u6362\u5206\u652F"
     },
-    React7.createElement("div", { className: "dshg-menu-head" }, "\u5207\u6362\u5206\u652F / \u6807\u7B7E"),
-    React7.createElement("input", {
+    React9.createElement("div", { className: "dshg-menu-head" }, "\u5207\u6362\u5206\u652F / \u6807\u7B7E"),
+    React9.createElement("input", {
       className: "dshg-input",
       placeholder: "\u7B5B\u9009\u5206\u652F\u540D\u2026",
       value: filter,
@@ -1922,13 +2513,13 @@ function BranchPicker(props) {
         }
       }
     }),
-    error !== "" ? React7.createElement("div", { className: "dshg-err" }, error) : null,
-    list === null ? React7.createElement("div", { className: "dshg-loading" }, "\u8BFB\u53D6\u5206\u652F\u2026") : React7.createElement(
+    error !== "" ? React9.createElement("div", { className: "dshg-err" }, error) : null,
+    list === null ? React9.createElement("div", { className: "dshg-loading" }, "\u8BFB\u53D6\u5206\u652F\u2026") : React9.createElement(
       "div",
       { className: "dshg-menu-scroll" },
-      local.length > 0 ? React7.createElement("div", { className: "dshg-menu-head" }, "\u672C\u5730") : null,
+      local.length > 0 ? React9.createElement("div", { className: "dshg-menu-head" }, "\u672C\u5730") : null,
       ...local.map(
-        (branch) => React7.createElement(
+        (branch) => React9.createElement(
           "button",
           {
             key: `l:${branch.name}`,
@@ -1938,14 +2529,14 @@ function BranchPicker(props) {
             title: branch.subject,
             onClick: () => switchTo(branch.name)
           },
-          React7.createElement("span", { className: "dshg-menu-icon" }, branch.current ? React7.createElement(Icon4, { name: "check" }) : null),
-          React7.createElement("span", { className: "dshg-menu-label" }, branch.name),
-          branch.ahead > 0 || branch.behind > 0 ? React7.createElement("span", { className: "dshg-menu-hint" }, `\u2191${branch.ahead} \u2193${branch.behind}`) : React7.createElement("span", { className: "dshg-menu-hint" }, branch.sha)
+          React9.createElement("span", { className: "dshg-menu-icon" }, branch.current ? React9.createElement(Icon5, { name: "check" }) : null),
+          React9.createElement("span", { className: "dshg-menu-label" }, branch.name),
+          branch.ahead > 0 || branch.behind > 0 ? React9.createElement("span", { className: "dshg-menu-hint" }, `\u2191${branch.ahead} \u2193${branch.behind}`) : React9.createElement("span", { className: "dshg-menu-hint" }, branch.sha)
         )
       ),
-      remote.length > 0 ? React7.createElement("div", { className: "dshg-menu-head" }, "\u8FDC\u7A0B") : null,
+      remote.length > 0 ? React9.createElement("div", { className: "dshg-menu-head" }, "\u8FDC\u7A0B") : null,
       ...remote.map(
-        (branch) => React7.createElement(
+        (branch) => React9.createElement(
           "button",
           {
             key: `r:${branch.name}`,
@@ -1962,16 +2553,16 @@ function BranchPicker(props) {
               });
             }
           },
-          React7.createElement("span", { className: "dshg-menu-icon" }, null),
-          React7.createElement("span", { className: "dshg-menu-label" }, branch.name),
-          React7.createElement("span", { className: "dshg-menu-hint" }, branch.sha)
+          React9.createElement("span", { className: "dshg-menu-icon" }, null),
+          React9.createElement("span", { className: "dshg-menu-label" }, branch.name),
+          React9.createElement("span", { className: "dshg-menu-hint" }, branch.sha)
         )
       )
     ),
-    React7.createElement(
+    React9.createElement(
       "div",
       { className: "dshg-branchnew" },
-      React7.createElement("input", {
+      React9.createElement("input", {
         className: "dshg-input",
         placeholder: "\u65B0\u5206\u652F\u540D\uFF08\u4ECE\u5F53\u524D HEAD \u521B\u5EFA\uFF09",
         value: newName,
@@ -1991,35 +2582,35 @@ function BranchPicker(props) {
 }
 function CompareView(props) {
   const { cwd, onClose, onPick } = props;
-  const [data, setData] = React7.useState(null);
-  const [error, setError] = React7.useState("");
-  const [loading, setLoading] = React7.useState(true);
-  const load = React7.useCallback(() => {
+  const [data, setData] = React9.useState(null);
+  const [error, setError] = React9.useState("");
+  const [loading, setLoading] = React9.useState(true);
+  const load = React9.useCallback(() => {
     setLoading(true);
     setError("");
     api.compare(cwd, 60).then((result) => setData(result)).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setLoading(false));
   }, [cwd]);
-  React7.useEffect(load, [load]);
-  const group = (title, hint, list, tone) => React7.createElement(
+  React9.useEffect(load, [load]);
+  const group = (title, hint, list, tone) => React9.createElement(
     "div",
     { className: "dshg-cmp-group" },
-    React7.createElement(
+    React9.createElement(
       "div",
       { className: "dshg-sechead dshg-static" },
-      React7.createElement("span", { className: `dshg-cmp-arrow dshg-cmp-${tone}` }, tone === "in" ? "\u2193" : "\u2191"),
-      React7.createElement("span", { className: "dshg-sectitle" }, title),
-      React7.createElement("span", { className: "dshg-count" }, list.length),
-      React7.createElement(
+      React9.createElement("span", { className: `dshg-cmp-arrow dshg-cmp-${tone}` }, tone === "in" ? "\u2193" : "\u2191"),
+      React9.createElement("span", { className: "dshg-sectitle" }, title),
+      React9.createElement("span", { className: "dshg-count" }, list.length),
+      React9.createElement(
         "span",
         { className: "dshg-secactions" },
-        React7.createElement("span", { className: "dshg-gsha" }, hint)
+        React9.createElement("span", { className: "dshg-gsha" }, hint)
       )
     ),
-    list.length === 0 ? React7.createElement("div", { className: "dshg-cmp-empty" }, "\u6CA1\u6709\u63D0\u4EA4") : React7.createElement(
+    list.length === 0 ? React9.createElement("div", { className: "dshg-cmp-empty" }, "\u6CA1\u6709\u63D0\u4EA4") : React9.createElement(
       "div",
       null,
       ...list.map(
-        (side) => React7.createElement(
+        (side) => React9.createElement(
           "div",
           {
             key: side.sha,
@@ -2037,53 +2628,53 @@ ${side.subject}`,
               }
             }
           },
-          React7.createElement("span", { className: "dshg-cmp-subject" }, side.subject === "" ? "(no message)" : side.subject),
-          React7.createElement(
+          React9.createElement("span", { className: "dshg-cmp-subject" }, side.subject === "" ? "(no message)" : side.subject),
+          React9.createElement(
             "span",
             { className: "dshg-gside" },
-            React7.createElement("span", { className: "dshg-gsha" }, side.short),
-            React7.createElement("span", null, relativeTime(side.time))
+            React9.createElement("span", { className: "dshg-gsha" }, side.short),
+            React9.createElement("span", null, relativeTime(side.time))
           )
         )
       )
     )
   );
-  return React7.createElement(
+  return React9.createElement(
     "div",
     { className: "dshg-diff dshg-compare" },
-    React7.createElement(
+    React9.createElement(
       "div",
       { className: "dshg-diffhead" },
-      React7.createElement(Icon4, { name: "sync" }),
-      React7.createElement(
+      React9.createElement(Icon5, { name: "sync" }),
+      React9.createElement(
         "span",
         { className: "dshg-diffpath" },
         data === null || data.upstream === "" ? "\u4E0E\u8FDC\u7A0B\u5BF9\u6BD4" : `\u4E0E ${data.upstream} \u5BF9\u6BD4`
       ),
-      React7.createElement("span", { className: "dshg-spacer" }),
-      React7.createElement(
+      React9.createElement("span", { className: "dshg-spacer" }),
+      React9.createElement(
         "button",
         { type: "button", className: "dshg-mini", title: "\u5237\u65B0\u5BF9\u6BD4", onClick: load },
-        React7.createElement(Icon4, { name: "refresh" })
+        React9.createElement(Icon5, { name: "refresh" })
       ),
-      React7.createElement(
+      React9.createElement(
         "button",
         { type: "button", className: "dshg-mini", title: "\u5173\u95ED\uFF08Esc\uFF09", onClick: onClose },
-        React7.createElement(Icon4, { name: "close" })
+        React9.createElement(Icon5, { name: "close" })
       )
     ),
-    React7.createElement(
+    React9.createElement(
       "div",
       { className: "dshg-diffbody dshg-cmp-body" },
-      loading ? React7.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u5BF9\u6BD4\u8FDC\u7A0B\u2026") : null,
-      !loading && error !== "" ? React7.createElement("div", { className: "dshg-diffempty" }, error) : null,
-      !loading && error === "" && data !== null && data.upstream === "" ? React7.createElement(
+      loading ? React9.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u5BF9\u6BD4\u8FDC\u7A0B\u2026") : null,
+      !loading && error !== "" ? React9.createElement("div", { className: "dshg-diffempty" }, error) : null,
+      !loading && error === "" && data !== null && data.upstream === "" ? React9.createElement(
         "div",
         { className: "dshg-diffempty" },
         "\u5F53\u524D\u5206\u652F\u6CA1\u6709\u4E0A\u6E38\u5206\u652F\uFF0C\u65E0\u6CD5\u5BF9\u6BD4\u3002\u5148\u63A8\u9001\u4E00\u6B21\uFF08\u4F1A\u5EFA\u7ACB\u4E0A\u6E38\uFF09\u518D\u56DE\u6765\u770B\u3002"
       ) : null,
-      !loading && data !== null && data.upstream !== "" ? React7.createElement(
-        React7.Fragment,
+      !loading && data !== null && data.upstream !== "" ? React9.createElement(
+        React9.Fragment,
         null,
         group("\u843D\u540E\uFF08\u8FDC\u7AEF\u6709\u3001\u672C\u5730\u6CA1\u6709\uFF09", data.upstream, data.behind, "in"),
         group("\u9886\u5148\uFF08\u672C\u5730\u6709\u3001\u8FDC\u7AEF\u6CA1\u6709\uFF09", "HEAD", data.ahead, "out")
@@ -2095,18 +2686,18 @@ function Popup(props) {
   const { cwd, sessionId, anchor, onClose } = props;
   const repo = useRepoState(cwd, true);
   const state = repo.state;
-  const [tab, setTab] = React7.useState("changes");
-  const [message, setMessage] = React7.useState("");
-  const [amend, setAmend] = React7.useState(false);
-  const [signoff, setSignoff] = React7.useState(false);
-  const [busy, setBusy] = React7.useState("");
-  const [notice, setNotice] = React7.useState("");
-  const [failure, setFailure] = React7.useState("");
-  const [selected, setSelected] = React7.useState(null);
-  const [open, setOpen] = React7.useState({ staged: true, changes: true, untracked: true });
-  const [menu, setMenu] = React7.useState(null);
-  const [branchPicker, setBranchPicker] = React7.useState(null);
-  const menuAnchor = React7.useRef(null);
+  const [tab, setTab] = React9.useState("changes");
+  const [message, setMessage] = React9.useState("");
+  const [amend, setAmend] = React9.useState(false);
+  const [signoff, setSignoff] = React9.useState(false);
+  const [busy, setBusy] = React9.useState("");
+  const [notice, setNotice] = React9.useState("");
+  const [failure, setFailure] = React9.useState("");
+  const [selected, setSelected] = React9.useState(null);
+  const [open, setOpen] = React9.useState({ staged: true, changes: true, untracked: true });
+  const [menu, setMenu] = React9.useState(null);
+  const [branchPicker, setBranchPicker] = React9.useState(null);
+  const menuAnchor = React9.useRef(null);
   const showMenu = (items, at) => {
     setBranchPicker(null);
     const anchor2 = at ?? menuAnchor.current ?? { x: window.innerWidth - 230, y: 96 };
@@ -2117,17 +2708,17 @@ function Popup(props) {
     setMenu(null);
     setBranchPicker(at);
   };
-  const [commitSha, setCommitSha] = React7.useState("");
-  const [detail, setDetail] = React7.useState(null);
-  const [confirm, setConfirm] = React7.useState(null);
-  const [compareOpen, setCompareOpen] = React7.useState(false);
-  const [diffSplit, setDiffSplit] = React7.useState(true);
-  const [conflictFile, setConflictFile] = React7.useState("");
-  const [historyPath, setHistoryPath] = React7.useState("");
-  const [historyCommits, setHistoryCommits] = React7.useState(null);
-  const messageRef = React7.useRef(null);
+  const [commitSha, setCommitSha] = React9.useState("");
+  const [detail, setDetail] = React9.useState(null);
+  const [confirm, setConfirm] = React9.useState(null);
+  const [compareOpen, setCompareOpen] = React9.useState(false);
+  const [diffSplit, setDiffSplit] = React9.useState(true);
+  const [conflictFile, setConflictFile] = React9.useState("");
+  const [historyPath, setHistoryPath] = React9.useState("");
+  const [historyCommits, setHistoryCommits] = React9.useState(null);
+  const messageRef = React9.useRef(null);
   const stagedCount = state?.staged.length ?? 0;
-  React7.useEffect(() => {
+  React9.useEffect(() => {
     const onKey = (event) => {
       if (event.key !== "Escape") return;
       if (menu !== null || branchPicker !== null || confirm !== null) return;
@@ -2137,7 +2728,7 @@ function Popup(props) {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose, menu, branchPicker, confirm]);
-  React7.useEffect(() => {
+  React9.useEffect(() => {
     setSelected(null);
     setMessage("");
     setAmend(false);
@@ -2209,14 +2800,14 @@ function Popup(props) {
       {
         id: "pull",
         label: "\u62C9\u53D6\uFF08Pull\uFF09",
-        icon: React7.createElement(Icon4, { name: "download" }),
+        icon: React9.createElement(Icon5, { name: "download" }),
         hint: behind2 > 0 ? `\u843D\u540E ${behind2}` : void 0,
         onSelect: () => doSync("pull")
       },
       {
         id: "push",
         label: "\u63A8\u9001\uFF08Push\uFF09",
-        icon: React7.createElement(Icon4, { name: "upload" }),
+        icon: React9.createElement(Icon5, { name: "upload" }),
         hint: ahead2 > 0 ? `\u9886\u5148 ${ahead2}` : void 0,
         onSelect: () => {
           if (ahead2 === 0) {
@@ -2227,20 +2818,20 @@ function Popup(props) {
       {
         id: "fetch",
         label: "\u6293\u53D6\uFF08Fetch\uFF09",
-        icon: React7.createElement(Icon4, { name: "sync" }),
+        icon: React9.createElement(Icon5, { name: "sync" }),
         onSelect: () => doSync("fetch")
       },
       { id: "h2", label: "\u5206\u652F\u4E0E\u8FDC\u7AEF", heading: true, separated: true },
       {
         id: "switch",
         label: "\u5207\u6362\u5206\u652F\u2026",
-        icon: React7.createElement(Icon4, { name: "branch" }),
+        icon: React9.createElement(Icon5, { name: "branch" }),
         onSelect: () => showBranchPicker({ x: rect.right, y: rect.bottom })
       },
       {
         id: "stage",
         label: "\u6682\u5B58\u5168\u90E8\u66F4\u6539",
-        icon: React7.createElement(Icon4, { name: "plus" }),
+        icon: React9.createElement(Icon5, { name: "plus" }),
         disabled: state === null || state.changes.length + state.untracked.length === 0,
         onSelect: () => {
           if (state === null) return;
@@ -2248,10 +2839,10 @@ function Popup(props) {
           run("stage", () => api.stage(cwd, paths));
         }
       },
-      { id: "remotes", label: "\u8FDC\u7A0B\u7BA1\u7406\u2026", icon: React7.createElement(Icon4, { name: "repo" }), onSelect: openRemotesMenu },
+      { id: "remotes", label: "\u8FDC\u7A0B\u7BA1\u7406\u2026", icon: React9.createElement(Icon5, { name: "repo" }), onSelect: openRemotesMenu },
       { id: "h3", label: "\u5176\u5B83", heading: true, separated: true },
-      { id: "terminal", label: "\u6253\u5F00 Git \u7EC8\u7AEF", icon: React7.createElement(Icon4, { name: "terminal" }), onSelect: () => setTab("terminal") },
-      { id: "refresh", label: "\u5237\u65B0", icon: React7.createElement(Icon4, { name: "refresh" }), onSelect: doManualRefresh }
+      { id: "terminal", label: "\u6253\u5F00 Git \u7EC8\u7AEF", icon: React9.createElement(Icon5, { name: "terminal" }), onSelect: () => setTab("terminal") },
+      { id: "refresh", label: "\u5237\u65B0", icon: React9.createElement(Icon5, { name: "refresh" }), onSelect: doManualRefresh }
     ]);
   };
   const openRemotesMenu = () => {
@@ -2272,7 +2863,7 @@ function Popup(props) {
         id: "add",
         label: "\u6DFB\u52A0\u8FDC\u7AEF\u2026",
         separated: true,
-        icon: React7.createElement(Icon4, { name: "plus" }),
+        icon: React9.createElement(Icon5, { name: "plus" }),
         onSelect: () => addRemoteFlow()
       });
       showMenu(items);
@@ -2433,7 +3024,7 @@ function Popup(props) {
         setSelected(entry);
       }
     };
-    return React7.createElement(
+    return React9.createElement(
       "div",
       {
         key: `${entry.kind}:${entry.path}:${entry.from}`,
@@ -2450,27 +3041,27 @@ function Popup(props) {
           }
         }
       },
-      React7.createElement(
+      React9.createElement(
         "span",
         { className: "dshg-rowname" },
-        dir === "" ? null : React7.createElement("span", { className: "dshg-rowdir" }, dir),
+        dir === "" ? null : React9.createElement("span", { className: "dshg-rowdir" }, dir),
         base
       ),
-      React7.createElement(
+      React9.createElement(
         "span",
         { className: "dshg-rowdeco" },
-        stat !== void 0 && changed > 0 ? React7.createElement(
+        stat !== void 0 && changed > 0 ? React9.createElement(
           "span",
           { className: "dshg-rowstat" },
-          React7.createElement("span", { className: "dshg-add" }, `+${stat.added}`),
-          React7.createElement("span", { className: "dshg-del" }, `\u2212${stat.removed}`)
+          React9.createElement("span", { className: "dshg-add" }, `+${stat.added}`),
+          React9.createElement("span", { className: "dshg-del" }, `\u2212${stat.removed}`)
         ) : null,
-        React7.createElement("span", { className: `dshg-rowletter dshg-letter-${entry.letter}` }, entry.letter)
+        React9.createElement("span", { className: `dshg-rowletter dshg-letter-${entry.letter}` }, entry.letter)
       ),
-      React7.createElement(
+      React9.createElement(
         "span",
         { className: "dshg-rowbtns" },
-        isStaged ? React7.createElement(
+        isStaged ? React9.createElement(
           "button",
           {
             type: "button",
@@ -2481,8 +3072,8 @@ function Popup(props) {
               run("unstage", () => api.unstage(cwd, [entry.path]));
             }
           },
-          React7.createElement(Icon4, { name: "minus" })
-        ) : React7.createElement(
+          React9.createElement(Icon5, { name: "minus" })
+        ) : React9.createElement(
           "button",
           {
             type: "button",
@@ -2493,9 +3084,9 @@ function Popup(props) {
               run("stage", () => api.stage(cwd, [entry.path]));
             }
           },
-          React7.createElement(Icon4, { name: "plus" })
+          React9.createElement(Icon5, { name: "plus" })
         ),
-        isStaged ? null : React7.createElement(
+        isStaged ? null : React9.createElement(
           "button",
           {
             type: "button",
@@ -2506,7 +3097,7 @@ function Popup(props) {
               run("discard", () => api.discard(cwd, [entry.path]));
             }
           },
-          React7.createElement(Icon4, { name: "undo" })
+          React9.createElement(Icon5, { name: "undo" })
         )
       )
     );
@@ -2515,10 +3106,10 @@ function Popup(props) {
     if (entries.length === 0) return null;
     const isOpen = open[key];
     const toggle = () => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
-    return React7.createElement(
+    return React9.createElement(
       "div",
       { className: "dshg-section", key },
-      React7.createElement(
+      React9.createElement(
         "div",
         {
           className: "dshg-sechead",
@@ -2532,18 +3123,18 @@ function Popup(props) {
             }
           }
         },
-        React7.createElement("span", { className: "dshg-caret", "data-open": isOpen }, React7.createElement(Icon4, { name: "chevron" })),
-        React7.createElement("span", { className: "dshg-sectitle" }, title),
-        React7.createElement("span", { className: "dshg-count" }, entries.length),
-        React7.createElement("span", { className: "dshg-secactions" }, actions)
+        React9.createElement("span", { className: "dshg-caret", "data-open": isOpen }, React9.createElement(Icon5, { name: "chevron" })),
+        React9.createElement("span", { className: "dshg-sectitle" }, title),
+        React9.createElement("span", { className: "dshg-count" }, entries.length),
+        React9.createElement("span", { className: "dshg-secactions" }, actions)
       ),
-      isOpen ? React7.createElement("div", null, ...entries.map(rowView)) : null
+      isOpen ? React9.createElement("div", null, ...entries.map(rowView)) : null
     );
   };
-  const [diffPayload, setDiffPayload] = React7.useState(null);
-  const [diffError, setDiffError] = React7.useState("");
-  const [diffLoading, setDiffLoading] = React7.useState(false);
-  React7.useEffect(() => {
+  const [diffPayload, setDiffPayload] = React9.useState(null);
+  const [diffError, setDiffError] = React9.useState("");
+  const [diffLoading, setDiffLoading] = React9.useState(false);
+  React9.useEffect(() => {
     if (selected === null) {
       setDiffPayload(null);
       setDiffError("");
@@ -2564,7 +3155,7 @@ function Popup(props) {
       alive = false;
     };
   }, [cwd, selected]);
-  React7.useEffect(() => {
+  React9.useEffect(() => {
     if (historyPath === "") {
       setHistoryCommits(null);
       return void 0;
@@ -2587,7 +3178,7 @@ function Popup(props) {
     setConflictFile("");
     setTab("graph");
   };
-  React7.useEffect(() => {
+  React9.useEffect(() => {
     if (commitSha === "") {
       setDetail(null);
       return void 0;
@@ -2620,17 +3211,17 @@ function Popup(props) {
     const top = Math.max(12, Math.min(anchor.bottom + 8, window.innerHeight - 320));
     return { top, right, width };
   };
-  const banner = failure !== "" ? React7.createElement(
+  const banner = failure !== "" ? React9.createElement(
     "div",
     { className: "dshg-err" },
     failure,
-    React7.createElement(
+    React9.createElement(
       "button",
       { type: "button", className: "dshg-err-close", onClick: () => setFailure("") },
       "\xD7"
     )
-  ) : repo.error !== "" ? React7.createElement("div", { className: "dshg-err" }, repo.error) : null;
-  const tabButton = (id, label, count) => React7.createElement(
+  ) : repo.error !== "" ? React9.createElement("div", { className: "dshg-err" }, repo.error) : null;
+  const tabButton = (id, label, count) => React9.createElement(
     "button",
     {
       type: "button",
@@ -2640,48 +3231,48 @@ function Popup(props) {
       onClick: () => setTab(id)
     },
     label,
-    count === void 0 ? null : React7.createElement("span", { className: "dshg-count" }, count)
+    count === void 0 ? null : React9.createElement("span", { className: "dshg-count" }, count)
   );
   const behind = state?.repo.behind ?? 0;
   const ahead = state?.repo.ahead ?? 0;
   const conflicts = state?.changes.filter((entry) => entry.kind === "conflicted") ?? [];
   const bodyForTab = () => {
-    if (tab === "terminal") return React7.createElement(Terminal, { cwd, active: tab === "terminal" });
+    if (tab === "terminal") return React9.createElement(Terminal, { cwd, active: tab === "terminal" });
     if (tab === "files") {
-      return React7.createElement(FileBrowser, {
+      return React9.createElement(FileBrowser, {
         cwd,
         active: tab === "files",
         onHistory: showFileHistory,
         onNotice: notify
       });
     }
-    if (repo.loading && state === null) return React7.createElement("div", { className: "dshg-loading" }, "\u6B63\u5728\u8BFB\u53D6\u4ED3\u5E93\u2026");
+    if (repo.loading && state === null) return React9.createElement("div", { className: "dshg-loading" }, "\u6B63\u5728\u8BFB\u53D6\u4ED3\u5E93\u2026");
     if (tab === "changes") {
       if (state === null) return null;
       const clean = state.staged.length + state.changes.length + state.untracked.length === 0;
-      const list = React7.createElement(
+      const list = React9.createElement(
         "div",
         { className: "dshg-list" },
-        clean ? React7.createElement(
+        clean ? React9.createElement(
           "div",
           { className: "dshg-empty" },
-          React7.createElement(Icon4, { name: "check" }),
-          React7.createElement("div", { className: "dshg-empty-title" }, "\u6CA1\u6709\u66F4\u6539"),
-          React7.createElement(
+          React9.createElement(Icon5, { name: "check" }),
+          React9.createElement("div", { className: "dshg-empty-title" }, "\u6CA1\u6709\u66F4\u6539"),
+          React9.createElement(
             "div",
             { className: "dshg-empty-body" },
             state.repo.empty ? "\u8FD9\u4E2A\u4ED3\u5E93\u8FD8\u6CA1\u6709\u63D0\u4EA4\u3002" : "\u5DE5\u4F5C\u533A\u662F\u5E72\u51C0\u7684\u3002"
           )
         ) : null,
-        conflicts.length > 0 ? React7.createElement(
+        conflicts.length > 0 ? React9.createElement(
           "div",
           { className: "dshg-section dshg-conflict-group" },
-          React7.createElement(
+          React9.createElement(
             "div",
             { className: "dshg-sechead dshg-static" },
-            React7.createElement(Icon4, { name: "warning" }),
-            React7.createElement("span", { className: "dshg-sectitle" }, "\u5408\u5E76\u51B2\u7A81"),
-            React7.createElement("span", { className: "dshg-count" }, conflicts.length)
+            React9.createElement(Icon5, { name: "warning" }),
+            React9.createElement("span", { className: "dshg-sectitle" }, "\u5408\u5E76\u51B2\u7A81"),
+            React9.createElement("span", { className: "dshg-count" }, conflicts.length)
           ),
           ...conflicts.map(rowView)
         ) : null,
@@ -2689,7 +3280,7 @@ function Popup(props) {
           "staged",
           "\u6682\u5B58\u7684\u66F4\u6539",
           state.staged,
-          state.staged.length > 0 ? React7.createElement(
+          state.staged.length > 0 ? React9.createElement(
             "button",
             {
               type: "button",
@@ -2700,17 +3291,17 @@ function Popup(props) {
                 run("unstage", () => api.unstage(cwd, state.staged.map((entry) => entry.path)));
               }
             },
-            React7.createElement(Icon4, { name: "minus" })
+            React9.createElement(Icon5, { name: "minus" })
           ) : null
         ),
         section(
           "changes",
           "\u66F4\u6539",
           state.changes,
-          state.changes.length > 0 ? React7.createElement(
-            React7.Fragment,
+          state.changes.length > 0 ? React9.createElement(
+            React9.Fragment,
             null,
-            React7.createElement(
+            React9.createElement(
               "button",
               {
                 type: "button",
@@ -2721,9 +3312,9 @@ function Popup(props) {
                   run("discard", () => api.discard(cwd, state.changes.map((entry) => entry.path)));
                 }
               },
-              React7.createElement(Icon4, { name: "undo" })
+              React9.createElement(Icon5, { name: "undo" })
             ),
-            React7.createElement(
+            React9.createElement(
               "button",
               {
                 type: "button",
@@ -2734,7 +3325,7 @@ function Popup(props) {
                   run("stage", () => api.stage(cwd, state.changes.map((entry) => entry.path)));
                 }
               },
-              React7.createElement(Icon4, { name: "plus" })
+              React9.createElement(Icon5, { name: "plus" })
             )
           ) : null
         ),
@@ -2742,7 +3333,7 @@ function Popup(props) {
           "untracked",
           "\u672A\u8DDF\u8E2A",
           state.untracked,
-          state.untracked.length > 0 ? React7.createElement(
+          state.untracked.length > 0 ? React9.createElement(
             "button",
             {
               type: "button",
@@ -2753,26 +3344,26 @@ function Popup(props) {
                 run("stage", () => api.stage(cwd, state.untracked.map((entry) => entry.path)));
               }
             },
-            React7.createElement(Icon4, { name: "plus" })
+            React9.createElement(Icon5, { name: "plus" })
           ) : null
         )
       );
-      const diffPanel = selected === null ? null : React7.createElement(
+      const diffPanel = selected === null ? null : React9.createElement(
         "div",
         { className: "dshg-diff" },
-        React7.createElement(
+        React9.createElement(
           "div",
           { className: "dshg-diffhead" },
-          React7.createElement(Icon4, { name: "file" }),
-          React7.createElement("span", { className: "dshg-diffpath", title: selected.path }, selected.path),
-          diffPayload !== null && !diffPayload.binary ? React7.createElement(
+          React9.createElement(Icon5, { name: "file" }),
+          React9.createElement("span", { className: "dshg-diffpath", title: selected.path }, selected.path),
+          diffPayload !== null && !diffPayload.binary ? React9.createElement(
             "span",
             { className: "dshg-rowstat" },
-            React7.createElement("span", { className: "dshg-add" }, `+${diffPayload.added}`),
-            React7.createElement("span", { className: "dshg-del" }, `\u2212${diffPayload.removed}`)
+            React9.createElement("span", { className: "dshg-add" }, `+${diffPayload.added}`),
+            React9.createElement("span", { className: "dshg-del" }, `\u2212${diffPayload.removed}`)
           ) : null,
-          React7.createElement("span", { className: "dshg-spacer" }),
-          React7.createElement(
+          React9.createElement("span", { className: "dshg-spacer" }),
+          React9.createElement(
             "button",
             {
               type: "button",
@@ -2781,44 +3372,44 @@ function Popup(props) {
               "aria-pressed": diffSplit,
               onClick: () => setDiffSplit((prev) => !prev)
             },
-            React7.createElement("span", { className: "dshg-viewtoggle" }, diffSplit ? "\u5E76\u6392" : "\u884C\u5185")
+            React9.createElement("span", { className: "dshg-viewtoggle" }, diffSplit ? "\u5E76\u6392" : "\u884C\u5185")
           ),
-          React7.createElement(
+          React9.createElement(
             "button",
             { type: "button", className: "dshg-mini", title: "\u5173\u95ED\u5DEE\u5F02\uFF08Esc\uFF09", onClick: () => setSelected(null) },
-            React7.createElement(Icon4, { name: "close" })
+            React9.createElement(Icon5, { name: "close" })
           )
         ),
-        React7.createElement(
+        React9.createElement(
           "div",
           { className: `dshg-diffbody${diffSplit ? " dshg-diffbody-split" : ""}` },
-          diffLoading ? React7.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u5DEE\u5F02\u2026") : null,
-          !diffLoading && diffError !== "" ? React7.createElement("div", { className: "dshg-diffempty" }, diffError) : null,
-          !diffLoading && diffPayload !== null && diffPayload.binary ? React7.createElement("div", { className: "dshg-diffempty" }, "\u4E8C\u8FDB\u5236\u6587\u4EF6\uFF0C\u65E0\u6CD5\u4EE5\u6587\u672C\u663E\u793A\u5DEE\u5F02") : null,
-          !diffLoading && diffPayload !== null && !diffPayload.binary ? React7.createElement(diffSplit ? DiffBodySplit : DiffBody, { patch: diffPayload.patch }) : null,
-          diffPayload?.tooLarge === true ? React7.createElement("div", { className: "dshg-diffempty" }, "\u5DEE\u5F02\u8FC7\u5927\uFF0C\u4EC5\u663E\u793A\u524D 60 \u4E07\u5B57\u7B26") : null
+          diffLoading ? React9.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u5DEE\u5F02\u2026") : null,
+          !diffLoading && diffError !== "" ? React9.createElement("div", { className: "dshg-diffempty" }, diffError) : null,
+          !diffLoading && diffPayload !== null && diffPayload.binary ? React9.createElement(BinaryDiffView, { cwd, path: diffPayload.path }) : null,
+          !diffLoading && diffPayload !== null && !diffPayload.binary ? React9.createElement(diffSplit ? DiffBodySplit : DiffBody, { patch: diffPayload.patch }) : null,
+          diffPayload?.tooLarge === true ? React9.createElement("div", { className: "dshg-diffempty" }, "\u5DEE\u5F02\u8FC7\u5927\uFF0C\u4EC5\u663E\u793A\u524D 60 \u4E07\u5B57\u7B26") : null
         )
       );
-      return React7.createElement(
-        React7.Fragment,
+      return React9.createElement(
+        React9.Fragment,
         null,
         list,
         diffPanel
       );
     }
     if (state === null) return null;
-    return React7.createElement(
+    return React9.createElement(
       "div",
       { className: "dshg-list dshg-list-graph" },
-      React7.createElement(
+      React9.createElement(
         "div",
         { className: "dshg-sechead dshg-static" },
-        React7.createElement("span", { className: "dshg-sectitle" }, historyPath !== "" ? "\u6587\u4EF6\u5386\u53F2" : "\u56FE\u8868"),
-        React7.createElement("span", { className: "dshg-count" }, graphCommits.length),
-        React7.createElement(
+        React9.createElement("span", { className: "dshg-sectitle" }, historyPath !== "" ? "\u6587\u4EF6\u5386\u53F2" : "\u56FE\u8868"),
+        React9.createElement("span", { className: "dshg-count" }, graphCommits.length),
+        React9.createElement(
           "span",
           { className: "dshg-secactions" },
-          historyPath !== "" ? React7.createElement(
+          historyPath !== "" ? React9.createElement(
             "button",
             {
               type: "button",
@@ -2829,16 +3420,16 @@ function Popup(props) {
                 setHistoryCommits(null);
               }
             },
-            React7.createElement(Icon4, { name: "close" })
-          ) : React7.createElement("span", { className: "dshg-gsha" }, state.repo.branch)
+            React9.createElement(Icon5, { name: "close" })
+          ) : React9.createElement("span", { className: "dshg-gsha" }, state.repo.branch)
         )
       ),
-      historyPath !== "" ? React7.createElement("div", { className: "dshg-history-path", title: historyPath }, historyPath) : null,
+      historyPath !== "" ? React9.createElement("div", { className: "dshg-history-path", title: historyPath }, historyPath) : null,
       ...graphRows.map((row) => {
         const commit = commitBySha.get(row.sha);
         if (commit === void 0) return null;
         const head = commit.sha === state.repo.head;
-        return React7.createElement(
+        return React9.createElement(
           "div",
           {
             key: row.sha,
@@ -2857,54 +3448,54 @@ ${commit.subject}`,
               }
             }
           },
-          React7.createElement(GraphLanes, { row, lanes: laneTotal }),
-          React7.createElement(
+          React9.createElement(GraphLanes, { row, lanes: laneTotal }),
+          React9.createElement(
             "span",
             { className: "dshg-gmeta" },
             ...commit.refs.slice(0, 3).map(
-              (ref, index) => React7.createElement(
+              (ref, index) => React9.createElement(
                 "span",
                 { key: `${ref}-${index}`, className: "dshg-gref", "data-kind": refKind(ref) },
                 refLabel(ref)
               )
             ),
-            React7.createElement("span", { className: "dshg-gsubject" }, commit.subject === "" ? "(no message)" : commit.subject)
+            React9.createElement("span", { className: "dshg-gsubject" }, commit.subject === "" ? "(no message)" : commit.subject)
           ),
-          React7.createElement(
+          React9.createElement(
             "span",
             { className: "dshg-gside" },
-            React7.createElement("span", { className: "dshg-gsha" }, commit.short),
-            React7.createElement("span", null, relativeTime(commit.time))
+            React9.createElement("span", { className: "dshg-gsha" }, commit.short),
+            React9.createElement("span", null, relativeTime(commit.time))
           )
         );
       })
     );
   };
-  const commitPanel = commitSha !== "" && tab === "graph" ? detail !== null ? React7.createElement(CommitDetailView, {
+  const commitPanel = commitSha !== "" && tab === "graph" ? detail !== null ? React9.createElement(CommitDetailView, {
     cwd,
     sha: commitSha,
     split: diffSplit,
     onToggleSplit: () => setDiffSplit((prev) => !prev),
     onClose: () => setCommitSha("")
-  }) : React7.createElement(
+  }) : React9.createElement(
     "div",
     { className: "dshg-diff" },
-    React7.createElement(
+    React9.createElement(
       "div",
       { className: "dshg-diffhead" },
-      React7.createElement(Icon4, { name: "commit" }),
-      React7.createElement("span", { className: "dshg-diffpath" }, `\u63D0\u4EA4 ${commitSha.slice(0, 7)}`),
-      React7.createElement("span", { className: "dshg-spacer" }),
-      React7.createElement(
+      React9.createElement(Icon5, { name: "commit" }),
+      React9.createElement("span", { className: "dshg-diffpath" }, `\u63D0\u4EA4 ${commitSha.slice(0, 7)}`),
+      React9.createElement("span", { className: "dshg-spacer" }),
+      React9.createElement(
         "button",
         { type: "button", className: "dshg-mini", title: "\u5173\u95ED", onClick: () => setCommitSha("") },
-        React7.createElement(Icon4, { name: "close" })
+        React9.createElement(Icon5, { name: "close" })
       )
     ),
-    React7.createElement("div", { className: "dshg-diffbody" }, React7.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u63D0\u4EA4\u2026"))
+    React9.createElement("div", { className: "dshg-diffbody" }, React9.createElement("div", { className: "dshg-diffempty" }, "\u6B63\u5728\u8BFB\u53D6\u63D0\u4EA4\u2026"))
   ) : null;
   const sideOpen = conflictFile !== "" || compareOpen || tab === "graph" && commitSha !== "";
-  const sidePanel = conflictFile !== "" ? React7.createElement(ConflictPanel, {
+  const sidePanel = conflictFile !== "" ? React9.createElement(ConflictPanel, {
     cwd,
     file: conflictFile,
     onClose: () => setConflictFile(""),
@@ -2912,7 +3503,7 @@ ${commit.subject}`,
       setSelected(null);
       repo.refresh(false);
     }
-  }) : compareOpen ? React7.createElement(CompareView, {
+  }) : compareOpen ? React9.createElement(CompareView, {
     cwd,
     onClose: () => setCompareOpen(false),
     onPick: (sha) => {
@@ -2921,14 +3512,14 @@ ${commit.subject}`,
       setCommitSha(sha);
     }
   }) : commitPanel;
-  return React7.createElement(
-    React7.Fragment,
+  return React9.createElement(
+    React9.Fragment,
     null,
-    React7.createElement("div", {
+    React9.createElement("div", {
       style: { position: "fixed", inset: 0, zIndex: 2147482e3, background: "transparent" },
       onClick: onClose
     }),
-    React7.createElement(
+    React9.createElement(
       "div",
       {
         className: "dshg-root",
@@ -2943,11 +3534,11 @@ ${commit.subject}`,
         onClick: (event) => event.stopPropagation()
       },
       /* ---- header ---- */
-      React7.createElement(
+      React9.createElement(
         "div",
         { className: "dshg-head" },
-        React7.createElement("span", { className: "dshg-title" }, React7.createElement(Icon4, { name: "git" }), "\u6E90\u4EE3\u7801\u7BA1\u7406"),
-        state !== null ? React7.createElement(
+        React9.createElement("span", { className: "dshg-title" }, React9.createElement(Icon5, { name: "git" }), "\u6E90\u4EE3\u7801\u7BA1\u7406"),
+        state !== null ? React9.createElement(
           "button",
           {
             type: "button",
@@ -2959,11 +3550,11 @@ ${commit.subject}`,
               showBranchPicker({ x: rect.right, y: rect.bottom });
             }
           },
-          React7.createElement(Icon4, { name: "branch" }),
+          React9.createElement(Icon5, { name: "branch" }),
           state.repo.branch,
-          state.repo.detached ? React7.createElement("span", { className: "dshg-branch-tag" }, "detached") : null
-        ) : React7.createElement("span", { className: "dshg-repo" }, cwd === "" ? "\u672A\u7ED1\u5B9A\u5DE5\u4F5C\u76EE\u5F55" : cwd),
-        state !== null && (ahead > 0 || behind > 0) ? React7.createElement(
+          state.repo.detached ? React9.createElement("span", { className: "dshg-branch-tag" }, "detached") : null
+        ) : React9.createElement("span", { className: "dshg-repo" }, cwd === "" ? "\u672A\u7ED1\u5B9A\u5DE5\u4F5C\u76EE\u5F55" : cwd),
+        state !== null && (ahead > 0 || behind > 0) ? React9.createElement(
           "button",
           {
             type: "button",
@@ -2972,9 +3563,9 @@ ${commit.subject}`,
 \u70B9\u51FB\u67E5\u770B\u4E24\u8FB9\u7684\u63D0\u4EA4`,
             onClick: () => setCompareOpen((prev) => !prev)
           },
-          ahead > 0 ? React7.createElement("span", { className: "dshg-ahead-up" }, `\u2191${ahead}`) : null,
-          behind > 0 ? React7.createElement("span", { className: "dshg-ahead-down" }, `\u2193${behind}`) : null
-        ) : state !== null ? React7.createElement(
+          ahead > 0 ? React9.createElement("span", { className: "dshg-ahead-up" }, `\u2191${ahead}`) : null,
+          behind > 0 ? React9.createElement("span", { className: "dshg-ahead-down" }, `\u2193${behind}`) : null
+        ) : state !== null ? React9.createElement(
           "button",
           {
             type: "button",
@@ -2982,10 +3573,10 @@ ${commit.subject}`,
             title: state.repo.upstream === "" ? "\u6CA1\u6709\u4E0A\u6E38\u5206\u652F" : `\u4E0E ${state.repo.upstream} \u5BF9\u6BD4\uFF1A\u5DF2\u540C\u6B65`,
             onClick: () => setCompareOpen((prev) => !prev)
           },
-          React7.createElement("span", { className: "dshg-ahead-even" }, "\u21C5")
+          React9.createElement("span", { className: "dshg-ahead-even" }, "\u21C5")
         ) : null,
-        React7.createElement("span", { className: "dshg-spacer" }),
-        React7.createElement(
+        React9.createElement("span", { className: "dshg-spacer" }),
+        React9.createElement(
           "button",
           {
             type: "button",
@@ -2994,9 +3585,9 @@ ${commit.subject}`,
             disabled: repo.loading,
             onClick: doManualRefresh
           },
-          React7.createElement(Icon4, { name: "refresh" })
+          React9.createElement(Icon5, { name: "refresh" })
         ),
-        React7.createElement(
+        React9.createElement(
           "button",
           {
             type: "button",
@@ -3005,17 +3596,17 @@ ${commit.subject}`,
             "aria-haspopup": "menu",
             onClick: openMainMenu
           },
-          React7.createElement(Icon4, { name: "dots" })
+          React9.createElement(Icon5, { name: "dots" })
         ),
-        React7.createElement(
+        React9.createElement(
           "button",
           { type: "button", className: "dshg-iconbtn", title: "\u5173\u95ED\uFF08Esc\uFF09", onClick: onClose },
-          React7.createElement(Icon4, { name: "close" })
+          React9.createElement(Icon5, { name: "close" })
         )
       ),
       banner,
       /* ---- tabs ---- */
-      React7.createElement(
+      React9.createElement(
         "div",
         { className: "dshg-tabs", role: "tablist" },
         tabButton("changes", "\u66F4\u6539", state === null ? void 0 : state.staged.length + state.changes.length + state.untracked.length),
@@ -3024,10 +3615,10 @@ ${commit.subject}`,
         tabButton("terminal", "\u7EC8\u7AEF")
       ),
       /* ---- commit box ---- */
-      tab === "changes" && cwd !== "" ? React7.createElement(
+      tab === "changes" && cwd !== "" ? React9.createElement(
         "div",
         { className: "dshg-commit" },
-        React7.createElement("textarea", {
+        React9.createElement("textarea", {
           ref: messageRef,
           className: "dshg-msg",
           placeholder: `\u6D88\u606F\uFF08Ctrl+Enter \u5728 ${state?.repo.branch ?? "main"} \u4E0A\u63D0\u4EA4\uFF09`,
@@ -3041,10 +3632,10 @@ ${commit.subject}`,
             }
           }
         }),
-        React7.createElement(
+        React9.createElement(
           "div",
           { className: "dshg-commitrow" },
-          React7.createElement(
+          React9.createElement(
             "button",
             {
               type: "button",
@@ -3053,10 +3644,10 @@ ${commit.subject}`,
               title: stagedCount === 0 ? "\u5148\u6682\u5B58\u8981\u63D0\u4EA4\u7684\u6587\u4EF6" : "\u63D0\u4EA4\uFF08Ctrl+Enter\uFF09",
               onClick: doCommit
             },
-            React7.createElement(Icon4, { name: "check" }),
+            React9.createElement(Icon5, { name: "check" }),
             busy === "commit" ? "\u63D0\u4EA4\u4E2D\u2026" : "\u63D0\u4EA4"
           ),
-          React7.createElement(
+          React9.createElement(
             "button",
             {
               type: "button",
@@ -3082,16 +3673,16 @@ ${commit.subject}`,
                 ], { x: rect.right - 214, y: rect.bottom + 4 });
               }
             },
-            React7.createElement(Icon4, { name: "chevron" })
+            React9.createElement(Icon5, { name: "chevron" })
           )
         ),
-        React7.createElement(
+        React9.createElement(
           "div",
           { className: "dshg-subrow" },
-          React7.createElement(
+          React9.createElement(
             "label",
             { className: "dshg-check" },
-            React7.createElement("input", {
+            React9.createElement("input", {
               type: "checkbox",
               checked: amend,
               onChange: (event) => setAmend(event.target.checked)
@@ -3099,7 +3690,7 @@ ${commit.subject}`,
             "\u4FEE\u6539\u4E0A\u6B21\u63D0\u4EA4"
           ),
           // Generated by the SAME model the conversation is running on.
-          React7.createElement(
+          React9.createElement(
             "button",
             {
               type: "button",
@@ -3108,36 +3699,36 @@ ${commit.subject}`,
               title: "\u7528\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\uFF0C\u6839\u636E\u5DEE\u5F02\u81EA\u52A8\u751F\u6210\u63D0\u4EA4\u6D88\u606F",
               onClick: doGenerate
             },
-            React7.createElement(Icon4, { name: "spark" }),
+            React9.createElement(Icon5, { name: "spark" }),
             busy === "generate" ? "\u751F\u6210\u4E2D\u2026" : "\u751F\u6210\u63D0\u4EA4\u6D88\u606F"
           ),
-          React7.createElement("span", { className: "dshg-spacer" }),
-          signoff ? React7.createElement("span", { className: "dshg-rowstat", title: "\u63D0\u4EA4\u4F1A\u9644\u5E26 Signed-off-by" }, "\u2713 signoff") : null,
-          notice !== "" ? React7.createElement("span", { className: "dshg-rowstat dshg-add" }, notice) : stagedCount > 0 ? React7.createElement("span", { className: "dshg-rowstat" }, `${stagedCount} \u4E2A\u6587\u4EF6\u5DF2\u6682\u5B58`) : null
+          React9.createElement("span", { className: "dshg-spacer" }),
+          signoff ? React9.createElement("span", { className: "dshg-rowstat", title: "\u63D0\u4EA4\u4F1A\u9644\u5E26 Signed-off-by" }, "\u2713 signoff") : null,
+          notice !== "" ? React9.createElement("span", { className: "dshg-rowstat dshg-add" }, notice) : stagedCount > 0 ? React9.createElement("span", { className: "dshg-rowstat" }, `${stagedCount} \u4E2A\u6587\u4EF6\u5DF2\u6682\u5B58`) : null
         )
       ) : null,
       /* ---- body ---- */
       // `dshg-pane` is the left column and `sidePanel` the right one; `bodyForTab`
       // returns only the content, never its own column wrapper.
-      React7.createElement("div", { className: "dshg-body" }, bodyForTab(), sidePanel),
+      React9.createElement("div", { className: "dshg-body" }, bodyForTab(), sidePanel),
       /* ---- footer ---- */
-      React7.createElement(
+      React9.createElement(
         "div",
         { className: "dshg-foot" },
-        React7.createElement(
+        React9.createElement(
           "span",
           { title: state?.repo.upstream === "" ? "\u6CA1\u6709\u4E0A\u6E38\u5206\u652F" : `\u8DDF\u8E2A ${state?.repo.upstream}` },
           state === null || state.repo.upstream === "" ? "\u65E0\u4E0A\u6E38" : state.repo.upstream
         ),
-        React7.createElement("span", null, "\u66F4\u6539 ", React7.createElement("b", null, String((state?.changes.length ?? 0) + (state?.untracked.length ?? 0)))),
-        React7.createElement("span", null, "\u6682\u5B58 ", React7.createElement("b", null, String(stagedCount))),
-        React7.createElement("span", { className: "dshg-spacer" }),
-        React7.createElement("span", null, busy === "" ? "\u53F3\u952E\u63D0\u4EA4\u53EF\u590D\u5236/\u91CD\u7F6E" : `${busy}\u2026`)
+        React9.createElement("span", null, "\u66F4\u6539 ", React9.createElement("b", null, String((state?.changes.length ?? 0) + (state?.untracked.length ?? 0)))),
+        React9.createElement("span", null, "\u6682\u5B58 ", React9.createElement("b", null, String(stagedCount))),
+        React9.createElement("span", { className: "dshg-spacer" }),
+        React9.createElement("span", null, busy === "" ? "\u53F3\u952E\u63D0\u4EA4\u53EF\u590D\u5236/\u91CD\u7F6E" : `${busy}\u2026`)
       )
     ),
     /* ---- floating layers ---- */
-    menu !== null ? React7.createElement(Menu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) }) : null,
-    branchPicker !== null ? React7.createElement(BranchPicker, {
+    menu !== null ? React9.createElement(Menu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) }) : null,
+    branchPicker !== null ? React9.createElement(BranchPicker, {
       cwd,
       current: state?.repo.branch ?? "",
       x: branchPicker.x,
@@ -3145,83 +3736,133 @@ ${commit.subject}`,
       onClose: () => setBranchPicker(null),
       onSwitched: () => repo.refresh(false)
     }) : null,
-    confirm !== null ? React7.createElement(ConfirmDialog, {
+    confirm !== null ? React9.createElement(ConfirmDialog, {
       confirm,
       onClose: () => setConfirm(null)
     }) : null
   );
 }
+function sameSessionId(a, b) {
+  const strip = (value) => value.replace(/^session-/, "");
+  const left = strip(a);
+  return left !== "" && left === strip(b);
+}
 function GitHeaderButton(props) {
   ensureStyles();
-  const [open, setOpen] = React7.useState(false);
-  const [anchor, setAnchor] = React7.useState(null);
-  const [cwd, setCwd] = React7.useState(props.cwd ?? "");
-  const [resolving, setResolving] = React7.useState(false);
-  const [resolveError, setResolveError] = React7.useState("");
-  const buttonRef = React7.useRef(null);
-  React7.useEffect(() => {
-    if (!open || cwd !== "" || resolving) return;
+  const global = props.variant === "global";
+  const [open, setOpen] = React9.useState(false);
+  const [anchor, setAnchor] = React9.useState(null);
+  const [cwd, setCwd] = React9.useState(props.cwd ?? "");
+  const [resolving, setResolving] = React9.useState(false);
+  const [resolveError, setResolveError] = React9.useState("");
+  const buttonRef = React9.useRef(null);
+  const storeCwd = props.useSessions?.((state) => {
+    const byId = state.byId;
+    if (byId === void 0) return void 0;
+    const wanted = props.sessionId;
+    if (wanted !== void 0) {
+      const direct = byId[wanted]?.cwd;
+      if (typeof direct === "string" && direct !== "") return direct;
+      for (const [key, row] of Object.entries(byId)) {
+        if (sameSessionId(key, wanted) && typeof row?.cwd === "string" && row.cwd !== "") return row.cwd;
+      }
+      return void 0;
+    }
+    const ids = state.ids;
+    const newest = Array.isArray(ids) && ids.length > 0 ? ids[ids.length - 1] : void 0;
+    const fromNewest = newest === void 0 ? void 0 : byId[newest]?.cwd;
+    if (typeof fromNewest === "string" && fromNewest !== "") return fromNewest;
+    for (const row of Object.values(byId)) {
+      if (typeof row?.cwd === "string" && row.cwd !== "") return row.cwd;
+    }
+    return void 0;
+  });
+  const resolvedFor = React9.useRef(void 0);
+  React9.useEffect(() => {
+    if (resolvedFor.current !== props.sessionId) {
+      resolvedFor.current = props.sessionId;
+      setCwd(props.cwd ?? "");
+      setResolveError("");
+    }
+  }, [props.sessionId, props.cwd]);
+  React9.useEffect(() => {
+    if (!open || resolving) return;
+    if (!global && typeof storeCwd === "string" && storeCwd !== "") {
+      setCwd((prev) => prev === storeCwd ? prev : storeCwd);
+      return;
+    }
+    if (cwd !== "") return;
     setResolving(true);
     setResolveError("");
+    const wanted = props.sessionId ?? "";
     api.sessions().then((result) => {
-      const wanted = props.sessionId ?? "";
-      const hit = result.sessions.find((row) => row.id === wanted) ?? result.sessions[0];
+      const hit = wanted === "" ? void 0 : result.sessions.find((row) => sameSessionId(row.id, wanted));
       if (hit === void 0) {
-        setResolveError("\u6CA1\u6709\u53EF\u7528\u7684\u5DE5\u4F5C\u76EE\u5F55");
+        setCwd("");
         return;
       }
       setCwd(hit.cwd);
     }).catch((err) => setResolveError(err instanceof Error ? err.message : String(err))).finally(() => setResolving(false));
-  }, [open, cwd, resolving, props.sessionId]);
-  return React7.createElement(
-    React7.Fragment,
+  }, [open, cwd, resolving, global, props.sessionId, storeCwd]);
+  return React9.createElement(
+    React9.Fragment,
     null,
-    React7.createElement(
+    React9.createElement(
       "button",
       {
         ref: buttonRef,
         type: "button",
-        className: `dshg-iconbtn dshg-trigger${open ? " dshg-trigger-on" : ""}`,
+        className: `dshg-iconbtn dshg-trigger${open ? " dshg-trigger-on" : ""}${global ? " dshg-trigger-global" : " dshg-trigger-session"}`,
         title: "\u6E90\u4EE3\u7801\u7BA1\u7406\uFF08Git\uFF09",
         "aria-label": "\u6E90\u4EE3\u7801\u7BA1\u7406",
         "aria-expanded": open,
         "data-dsh-plugin": "wagq-dsh-git",
-        "data-dsh-part": "scm-button",
+        "data-dsh-part": global ? "scm-button-global" : "scm-button",
         onClick: () => {
           setAnchor(buttonRef.current?.getBoundingClientRect() ?? null);
           setOpen((prev) => !prev);
         }
       },
-      React7.createElement(Icon4, { name: "git" })
+      React9.createElement(Icon5, { name: "git" })
     ),
-    open ? resolveError !== "" ? React7.createElement(
+    open ? resolveError !== "" ? React9.createElement(
       "div",
       { className: "dshg-err", style: { position: "fixed", top: 64, right: 16, maxWidth: 360, margin: 0, zIndex: 2147482001 } },
       resolveError
-    ) : React7.createElement(Popup, { cwd, sessionId: props.sessionId ?? "", anchor, onClose: () => setOpen(false) }) : null
+    ) : React9.createElement(Popup, { cwd, sessionId: props.sessionId ?? "", anchor, onClose: () => setOpen(false) }) : null
   );
 }
 
 // src/client/index.ts
 var name = "wagq-dsh-git-client";
 var inject = ["slots"];
-var SLOT = "conversation.session.header.utilities";
+var SESSION_SLOT = "conversation.session.header.utilities";
+var GLOBAL_SLOT = "conversation.header.leading";
 function apply(ctx) {
   ensureStyles();
   ctx.effect(
     () => ctx.slots.inject(
-      SLOT,
+      SESSION_SLOT,
       () => ctx.slots.register(
         {
-          name: SLOT,
+          name: SESSION_SLOT,
           id: "wagq-dsh-git",
-          order: 30,
-          inject: ((sessionId) => ({ sessionId }))
+          order: 30
         },
-        (props) => GitHeaderButton({ sessionId: props?.sessionId })
+        (props) => GitHeaderButton({ sessionId: props?.sessionId, useSessions: props?.useSessions, variant: "session" })
       )
     ),
-    "wagq-dsh-git: header-button"
+    "wagq-dsh-git: session-header-button"
+  );
+  ctx.effect(
+    () => ctx.slots.inject(
+      GLOBAL_SLOT,
+      () => ctx.slots.register(
+        { name: GLOBAL_SLOT, id: "wagq-dsh-git-global", order: 30 },
+        () => GitHeaderButton({ variant: "global" })
+      )
+    ),
+    "wagq-dsh-git: global-header-button"
   );
   ctx.effect(() => () => removeStyles(), "wagq-dsh-git: styles");
 }

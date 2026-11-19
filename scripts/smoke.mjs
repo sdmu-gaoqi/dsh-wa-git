@@ -339,6 +339,21 @@ async function testHost() {
   assert.ok(fileLog.json.commits.length >= 1, 'README.md has commits')
   ok('GET /api/file-history 返回单文件提交历史')
 
+  // Content of a file AS OF a commit (not the working-tree copy).
+  const commitFileSha = git('rev-parse', 'HEAD').trim()
+  const atCommit = await callRoute(route.handler, {
+    url: `/wagq-git/api/commit-file?cwd=${encoded}&sha=${commitFileSha}&path=${encodeURIComponent('README.md')}`,
+  })
+  assert.equal(atCommit.status, 200, atCommit.text)
+  assert.match(atCommit.json.text, /# smoke/)
+  ok('GET /api/commit-file 读取提交时的文件内容')
+
+  const badCommit = await callRoute(route.handler, {
+    url: `/wagq-git/api/commit-file?cwd=${encoded}&sha=notasha&path=README.md`,
+  })
+  assert.equal(badCommit.status, 400)
+  ok('非法 sha 的 commit-file → 400')
+
   const badPath = await callRoute(route.handler, { url: `/wagq-git/api/file-history?cwd=${encoded}&path=..%2Fetc` })
   assert.equal(badPath.status, 400)
   ok('逃逸路径的 file-history → 400')
@@ -369,6 +384,31 @@ async function testHost() {
   assert.equal(escapeContent.status, 400)
   ok('逃逸路径的 file-content → 400')
   fs.unlinkSync(pngPath)
+
+  const writeBack = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/write-file',
+    body: { cwd: dir, path: 'edit.txt', text: 'line1\nline2\n' },
+  })
+  assert.equal(writeBack.status, 404, 'write needs the file to exist first')
+  fs.writeFileSync(path.join(dir, 'edit.txt'), 'old\n')
+  const wrote = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/write-file',
+    body: { cwd: dir, path: 'edit.txt', text: 'new content\n' },
+  })
+  assert.equal(wrote.status, 200, wrote.text)
+  assert.equal(fs.readFileSync(path.join(dir, 'edit.txt'), 'utf8'), 'new content\n')
+  ok('POST /api/write-file 保存文本')
+
+  const writeImage = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/write-file',
+    body: { cwd: dir, path: 'pixel.png', text: 'nope' },
+  })
+  assert.equal(writeImage.status, 400)
+  ok('拒绝把图片当文本写入')
+  fs.unlinkSync(path.join(dir, 'edit.txt'))
 
   const openBad = await callRoute(route.handler, {
     method: 'POST',
@@ -756,15 +796,20 @@ async function testClient() {
   ok('导出 name + inject（slots）')
 
   let captured = null
+  const registered = []
   let injectCalled = 0
   const ctx = {
     slots: {
       inject(name, callback) {
         injectCalled += 1
-        assert.equal(name, 'conversation.session.header.utilities')
+        assert.ok(
+          name === 'conversation.session.header.utilities' || name === 'conversation.header.leading',
+          `unexpected slot: ${name}`,
+        )
         return callback()
       },
       register(spec, component) {
+        registered.push({ spec, component })
         captured = { spec, component }
         return () => {}
       },
@@ -779,11 +824,15 @@ async function testClient() {
   }
 
   exportsObject.apply(ctx)
-  assert.equal(injectCalled, 1, 'injects into the header utilities slot once')
-  assert.ok(captured !== null, 'slot registration captured')
-  assert.equal(captured.spec.name, 'conversation.session.header.utilities')
-  assert.equal(captured.spec.id, 'wagq-dsh-git')
-  ok('注册到 conversation.session.header.utilities')
+  assert.equal(injectCalled, 2, 'injects into both header slots')
+  assert.equal(registered.length, 2)
+  const sessionEntry = registered.find((entry) => entry.spec.name === 'conversation.session.header.utilities')
+  assert.ok(sessionEntry !== undefined, 'session slot registered')
+  assert.equal(sessionEntry.spec.id, 'wagq-dsh-git')
+  const globalEntry = registered.find((entry) => entry.spec.name === 'conversation.header.leading')
+  assert.ok(globalEntry !== undefined, 'global fallback slot registered')
+  captured = sessionEntry
+  ok('注册到 conversation.session.header.utilities（+ 全局兜底槽）')
 
   const React = require('react')
   const { renderToStaticMarkup } = require('react-dom/server')
