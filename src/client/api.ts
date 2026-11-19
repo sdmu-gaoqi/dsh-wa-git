@@ -164,6 +164,14 @@ export interface GeneratedMessage {
   model: string
 }
 
+export interface ConflictFile {
+  path: string
+  ours: string
+  theirs: string
+  base: string
+  worktree: string
+}
+
 export class ApiError extends Error {
   status: number
   detail: string
@@ -240,6 +248,12 @@ export const api = {
   },
   generateMessage(cwd: string, sessionId: string): Promise<GeneratedMessage> {
     return post('generate-message', { cwd, sessionId })
+  },
+  conflicts(cwd: string, paths: string[]): Promise<{ ok: true; conflicts: ConflictFile[] }> {
+    return get('conflicts', { cwd, paths: paths.join('\0') })
+  },
+  resolveConflict(cwd: string, paths: string[], side: 'ours' | 'theirs'): Promise<{ ok: true; remaining: string[] }> {
+    return post('resolve-conflict', { cwd, paths, side })
   },
   stage(cwd: string, paths: string[]): Promise<{ ok: true }> {
     return post('stage', { cwd, paths })

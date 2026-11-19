@@ -516,6 +516,69 @@ async function testHost() {
 
   git('reset', '-q', '--hard', 'HEAD')
 
+  /* ---- conflict resolution ---- */
+
+  // Create a real merge conflict: branch A and main edit the same line.
+  {
+    const conflictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wagq-git-conflict-'))
+    const cg = (...args) => execFileSync('git', args, { cwd: conflictDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    cg('init', '-q', '-b', 'main')
+    cg('config', 'user.name', 'T')
+    cg('config', 'user.email', 't@e.com')
+    fs.writeFileSync(path.join(conflictDir, 'shared.txt'), 'base\n')
+    cg('add', '.')
+    cg('commit', '-q', '-m', 'base')
+    cg('checkout', '-q', '-b', 'feature')
+    fs.writeFileSync(path.join(conflictDir, 'shared.txt'), 'theirs change\n')
+    cg('add', '.')
+    cg('commit', '-q', '-m', 'theirs')
+    cg('checkout', '-q', 'main')
+    fs.writeFileSync(path.join(conflictDir, 'shared.txt'), 'ours change\n')
+    cg('add', '.')
+    cg('commit', '-q', '-m', 'ours')
+    let conflicted = false
+    try {
+      cg('merge', 'feature')
+    } catch {
+      conflicted = true
+    }
+    assert.equal(conflicted, true, 'merge should conflict')
+
+    const ce = encodeURIComponent(conflictDir)
+    const list = await callRoute(route.handler, { url: `/wagq-git/api/conflicts?cwd=${ce}` })
+    assert.equal(list.status, 200, list.text)
+    assert.equal(list.json.conflicts.length, 1)
+    assert.equal(list.json.conflicts[0].path, 'shared.txt')
+    assert.equal(list.json.conflicts[0].ours, 'ours change\n')
+    assert.equal(list.json.conflicts[0].theirs, 'theirs change\n')
+    assert.equal(list.json.conflicts[0].base, 'base\n')
+    assert.ok(list.json.conflicts[0].worktree.includes('<<<<<<<'))
+    ok('GET /api/conflicts 读取三方内容与带标记原文')
+
+    const resolved = await callRoute(route.handler, {
+      method: 'POST',
+      url: '/wagq-git/api/resolve-conflict',
+      body: { cwd: conflictDir, paths: ['shared.txt'], side: 'theirs' },
+    })
+    assert.equal(resolved.status, 200, resolved.text)
+    assert.equal(resolved.json.remaining.length, 0)
+    assert.equal(fs.readFileSync(path.join(conflictDir, 'shared.txt'), 'utf8').replace(/\r\n/g, '\n'), 'theirs change\n')
+    assert.equal(cg('status', '--porcelain=v1').trim(), 'M  shared.txt')
+    ok('POST /api/resolve-conflict 采用 theirs 并 git add')
+
+    const badSide = await callRoute(route.handler, {
+      method: 'POST',
+      url: '/wagq-git/api/resolve-conflict',
+      body: { cwd: conflictDir, paths: ['shared.txt'], side: 'nobody' },
+    })
+    assert.equal(badSide.status, 400)
+    ok('非法 side → 400')
+
+    // Restore the real ctx.get before the following tests use the model mocks.
+    // (No model calls follow, but keep the fixture isolated.)
+    fs.rmSync(conflictDir, { recursive: true, force: true })
+  }
+
   fs.writeFileSync(path.join(dir, 'second.txt'), 'two\n')
   git('add', '.')
   git('commit', '-q', '-m', 'chore: 第二个提交')

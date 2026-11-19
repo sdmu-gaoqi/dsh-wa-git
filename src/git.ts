@@ -1102,3 +1102,99 @@ function splitSentinel(text: string, sentinel: string, fallbackCwd: string): { o
     code: codeText === '' ? 0 : Number(codeText) || 0,
   }
 }
+
+/* ---------------------------------------------------------------- conflicts */
+
+export interface ConflictFile {
+  path: string
+  /** Our side (stage 2), from the current branch. */
+  ours: string
+  /** Their side (stage 3), from the incoming branch. */
+  theirs: string
+  /** Common ancestor (stage 1), when the file was modified on both sides. */
+  base: string
+  /** Worktree file including the `<<<<<<<` / `=======` / `>>>>>>>` markers. */
+  worktree: string
+}
+
+/** Which stages exist for a path in `git ls-files -u` output. */
+async function conflictStages(cwd: string, path: string): Promise<Record<number, string>> {
+  let raw = ''
+  try {
+    raw = await gitOrThrow(cwd, ['ls-files', '-u', '-z', '--', path])
+  } catch {
+    return {}
+  }
+  const stages: Record<number, string> = {}
+  for (const record of raw.split('\0')) {
+    if (record === '') continue
+    // "<mode> <sha> <stage>\t<path>"
+    const match = /^\S+\s+(\S+)\s+([123])\t/.exec(record)
+    if (match === null) continue
+    stages[Number(match[2])] = match[1]
+  }
+  return stages
+}
+
+async function blobText(cwd: string, sha: string | undefined): Promise<string> {
+  if (sha === undefined) return ''
+  try {
+    return await gitOrThrow(cwd, ['cat-file', 'blob', sha])
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Read a conflicted file's three stages so the popup can show ours / theirs.
+ *
+ * A delete/modify conflict has only one stage; the missing side is returned as an
+ * empty string and the UI labels it accordingly.
+ */
+export async function conflictFiles(cwd: string, paths: string[]): Promise<ConflictFile[]> {
+  const out: ConflictFile[] = []
+  for (const path of paths) {
+    const stages = await conflictStages(cwd, path)
+    let worktree = ''
+    try {
+      worktree = await readFile(join(cwd, path), 'utf8')
+    } catch {
+      // deleted by one side
+    }
+    out.push({
+      path,
+      ours: await blobText(cwd, stages[2]),
+      theirs: await blobText(cwd, stages[3]),
+      base: await blobText(cwd, stages[1]),
+      worktree,
+    })
+  }
+  return out
+}
+
+export type ConflictResolution = 'ours' | 'theirs'
+
+/**
+ * Resolve a conflict by taking one whole side.
+ *
+ * `git checkout --ours/--theirs` restores the chosen stage into the worktree;
+ * `git add` then marks the path resolved. This resolves the WHOLE file, which is
+ * what "use ours / use theirs" means; hand-editing markers is still available
+ * through the terminal tab for partial resolutions.
+ */
+export async function resolveConflict(
+  cwd: string,
+  paths: string[],
+  side: ConflictResolution,
+): Promise<string[]> {
+  if (paths.length === 0) throw new GitError('没有要解决的冲突文件', 400)
+  for (const path of paths) {
+    await gitOrThrow(cwd, ['checkout', `--${side}`, '--', path])
+    await gitOrThrow(cwd, ['add', '--', path])
+  }
+  const remaining = (await gitOrThrow(cwd, ['diff', '--name-only', '--diff-filter=U']))
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+  return remaining
+}

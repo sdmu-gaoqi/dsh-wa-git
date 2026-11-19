@@ -29,6 +29,7 @@ import { CSS } from './styles'
 import { layoutGraph, laneColor } from './graph'
 import type { GraphRow } from './graph'
 import { DiffBody, DiffBodySplit } from './parts/DiffBody'
+import { ConflictPanel } from './parts/ConflictPanel'
 import { Menu } from './parts/Menu'
 import type { MenuItem } from './parts/Menu'
 import { Terminal } from './parts/Terminal'
@@ -704,6 +705,8 @@ function Popup(props: PopupProps): React.ReactElement {
   const [compareOpen, setCompareOpen] = React.useState(false)
   /** Side-by-side (VS Code style) vs inline diff. Remembered for this popup. */
   const [diffSplit, setDiffSplit] = React.useState(true)
+  /** A conflicted file being resolved; takes over the side panel. */
+  const [conflictFile, setConflictFile] = React.useState('')
   const messageRef = React.useRef<HTMLTextAreaElement | null>(null)
 
   const stagedCount = state?.staged.length ?? 0
@@ -727,6 +730,7 @@ function Popup(props: PopupProps): React.ReactElement {
     setFailure('')
     setCommitSha('')
     setCompareOpen(false)
+    setConflictFile('')
     setTab('changes')
   }, [cwd])
 
@@ -1022,23 +1026,31 @@ function Popup(props: PopupProps): React.ReactElement {
   const rowView = (entry: StatusEntry): React.ReactElement => {
     const { dir, base } = splitPath(entry.path)
     const isStaged = entry.kind === 'staged'
+    const isConflict = entry.kind === 'conflicted'
     const active = selected !== null && selected.path === entry.path && selected.kind === entry.kind
     const stat = state?.stats?.[entry.path]
     const changed = stat === undefined ? 0 : stat.added + stat.removed
+    const open = (): void => {
+      if (isConflict) setConflictFile(entry.path)
+      else {
+        setConflictFile('')
+        setSelected(entry)
+      }
+    }
     return React.createElement(
       'div',
       {
         key: `${entry.kind}:${entry.path}:${entry.from}`,
-        className: 'dshg-row',
+        className: `dshg-row${isConflict ? ' dshg-row-conflict' : ''}`,
         role: 'button',
         tabIndex: 0,
         'data-active': active,
-        title: entry.from === '' ? entry.path : `${entry.from} → ${entry.path}`,
-        onClick: () => setSelected(entry),
+        title: isConflict ? `${entry.path}（点击解决冲突）` : entry.from === '' ? entry.path : `${entry.from} → ${entry.path}`,
+        onClick: open,
         onKeyDown: (event: React.KeyboardEvent) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
-            setSelected(entry)
+            open()
           }
         },
       },
@@ -1207,9 +1219,11 @@ function Popup(props: PopupProps): React.ReactElement {
 
   /* ---- layout ---- */
   const position = (): React.CSSProperties => {
-    // A side panel needs room for two columns; widen instead of squeezing both.
+    // A side panel needs room for the list + a two-column diff. Prefer using
+    // most of the viewport instead of squeezing everything into 860px.
     const needsSide = compareOpen || (tab === 'graph' && commitSha !== '') || (tab === 'changes' && selected !== null)
-    const width = Math.min(needsSide ? 860 : 480, Math.max(320, window.innerWidth - 24))
+    const preferred = needsSide ? Math.max(1080, Math.round(window.innerWidth * 0.9)) : 480
+    const width = Math.min(preferred, Math.max(320, window.innerWidth - 24))
     if (anchor === null || typeof window === 'undefined') return { top: 64, right: 16, width }
     const right = Math.max(12, Math.min(window.innerWidth - width - 12, window.innerWidth - anchor.right))
     const top = Math.max(12, Math.min(anchor.bottom + 8, window.innerHeight - 320))
@@ -1248,6 +1262,7 @@ function Popup(props: PopupProps): React.ReactElement {
 
   const behind = state?.repo.behind ?? 0
   const ahead = state?.repo.ahead ?? 0
+  const conflicts = state?.changes.filter((entry) => entry.kind === 'conflicted') ?? []
 
   const bodyForTab = (): React.ReactNode => {
     if (tab === 'terminal') return React.createElement(Terminal, { cwd, active: tab === 'terminal' })
@@ -1272,6 +1287,20 @@ function Popup(props: PopupProps): React.ReactElement {
               ),
             )
           : null,
+          conflicts.length > 0
+            ? React.createElement(
+                'div',
+                { className: 'dshg-section dshg-conflict-group' },
+                React.createElement(
+                  'div',
+                  { className: 'dshg-sechead dshg-static' },
+                  React.createElement(Icon, { name: 'warning' }),
+                  React.createElement('span', { className: 'dshg-sectitle' }, '合并冲突'),
+                  React.createElement('span', { className: 'dshg-count' }, conflicts.length),
+                ),
+                ...conflicts.map(rowView),
+              )
+            : null,
           section(
             'staged',
             '暂存的更改',
@@ -1502,20 +1531,30 @@ function Popup(props: PopupProps): React.ReactElement {
           )
       : null
 
-  // The right-hand column: whichever of commit detail / upstream compare is open.
-  const sideOpen = compareOpen || (tab === 'graph' && commitSha !== '')
+  // The right-hand column: conflict > compare > commit detail, whichever is open.
+  const sideOpen = conflictFile !== '' || compareOpen || (tab === 'graph' && commitSha !== '')
   const sidePanel =
-    compareOpen
-      ? React.createElement(CompareView, {
+    conflictFile !== ''
+      ? React.createElement(ConflictPanel, {
           cwd,
-          onClose: () => setCompareOpen(false),
-          onPick: (sha) => {
-            setCompareOpen(false)
-            setTab('graph')
-            setCommitSha(sha)
+          file: conflictFile,
+          onClose: () => setConflictFile(''),
+          onResolved: () => {
+            setSelected(null)
+            repo.refresh(false)
           },
         })
-      : commitPanel
+      : compareOpen
+        ? React.createElement(CompareView, {
+            cwd,
+            onClose: () => setCompareOpen(false),
+            onPick: (sha) => {
+              setCompareOpen(false)
+              setTab('graph')
+              setCommitSha(sha)
+            },
+          })
+        : commitPanel
 
   return React.createElement(
     React.Fragment,

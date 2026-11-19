@@ -39,12 +39,14 @@ import {
   commitAction,
   commitDetail,
   compare,
+  conflictFiles,
   deleteBranch,
   diff,
   discard,
   graph,
   remotes,
   removeRemote,
+  resolveConflict,
   resolveRepoDir,
   setRemoteUrl,
   stage,
@@ -76,6 +78,7 @@ interface Body {
   staged?: unknown
   action?: unknown
   sessionId?: unknown
+  side?: unknown
   remote?: unknown
   branch?: unknown
   target?: unknown
@@ -303,6 +306,21 @@ export function apply(ctx: HostContext) {
           return
         }
 
+        if (url.pathname === `${PREFIX}/api/conflicts`) {
+          if (req.method !== 'GET') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const paths = url.searchParams.get('paths')
+          const list = paths === null || paths === ''
+            ? (await status(cwd)).changes.filter((entry) => entry.kind === 'conflicted').map((entry) => entry.path)
+            : paths.split('\0').filter((path) => path !== '')
+          const conflicts = list.length === 0 ? [] : await conflictFiles(cwd, list)
+          sendJson(res, 200, { ok: true, conflicts })
+          return
+        }
+
         // Model-generated commit message: uses the session's own model.
         if (url.pathname === `${PREFIX}/api/generate-message`) {
           if (req.method !== 'POST') {
@@ -400,6 +418,18 @@ export function apply(ctx: HostContext) {
         if (url.pathname === `${PREFIX}/api/remote-url`) {
           await setRemoteUrl(cwd, requiredString(body.name, 'name'), requiredString(body.url, 'url'))
           sendJson(res, 200, { ok: true })
+          return
+        }
+
+        if (url.pathname === `${PREFIX}/api/resolve-conflict`) {
+          const paths = (Array.isArray(body.paths) ? body.paths : []).filter(
+            (path): path is string => typeof path === 'string' && path !== '',
+          )
+          if (paths.length === 0) throw new GitError('paths 不能为空', 400)
+          const side = body.side === 'theirs' ? 'theirs' : body.side === 'ours' ? 'ours' : ''
+          if (side === '') throw new GitError('side 只能是 ours / theirs', 400)
+          const remaining = await resolveConflict(cwd, paths, side)
+          sendJson(res, 200, { ok: true, remaining })
           return
         }
 

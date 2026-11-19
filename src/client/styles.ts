@@ -121,7 +121,7 @@ export const CSS = `
 .dshg-root[data-side=true] .dshg-body{flex:1 1 auto;min-height:180px}
 /* Direct children of .dshg-body are the columns; each must be able to scroll. */
 .dshg-body > *{min-width:0;min-height:0}
-.dshg-list{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.dshg-list{flex:0 0 clamp(200px,26%,300px);min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
 .dshg-list::-webkit-scrollbar{width:10px}
 .dshg-list::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l1);border-radius:5px;border:2px solid transparent;background-clip:content-box}
 .dshg-list::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-scrollbar-hover-l1);background-clip:content-box}
@@ -185,7 +185,7 @@ export const CSS = `
  */
 .dshg-list-graph{padding-bottom:4px}
 .dshg-sechead.dshg-static{cursor:default;position:sticky;top:0;z-index:2}
-.dshg-diff{flex:1 1 60%;min-width:320px;border-left:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-base);display:flex;flex-direction:column;min-height:0;max-height:none}
+.dshg-diff{flex:1 1 auto;min-width:0;border-left:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-base);display:flex;flex-direction:column;min-height:0;max-height:none}
 .dshg-diffhead{flex:none;display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:.5px solid var(--dsw-alias-border-l3);font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .dshg-diffhead svg{width:12px;height:12px;flex:none}
 .dshg-diffpath{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
@@ -301,6 +301,31 @@ export const CSS = `
 .dshg-cmp-row:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
 .dshg-cmp-subject{min-width:0;flex:1;font-size:12px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dshg-cmp-empty{padding:8px 12px;font-size:11px;color:var(--dsw-alias-label-quaternary)}
+
+/* ---- conflicts ---- */
+.dshg-row-conflict .dshg-rowname{color:var(--dsw-alias-state-error-primary);font-weight:500}
+.dshg-conflict-group .dshg-sechead svg{color:var(--dsw-alias-state-error-primary)}
+.dshg-conflict .dshg-diffhead svg{color:var(--dsw-alias-state-error-primary)}
+.dshg-cf-actions{flex:none;display:flex;gap:8px;padding:8px 10px;border-bottom:.5px solid var(--dsw-alias-border-l3)}
+.dshg-cf-btn{flex:1;height:28px;border:.5px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+.dshg-cf-btn:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover)}
+.dshg-cf-btn[disabled]{opacity:.5;cursor:default}
+.dshg-cf-ours{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 50%,transparent)}
+.dshg-cf-theirs{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 50%,transparent)}
+.dshg-cf-body{overflow:auto}
+.dshg-cf-sides{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-width:0}
+.dshg-cf-col{min-width:0;overflow:hidden}
+.dshg-cf-col + .dshg-cf-col{border-left:.5px solid var(--dsw-alias-border-l3)}
+.dshg-cf-head{position:sticky;top:0;z-index:1;padding:4px 8px;font-size:11px;font-weight:600;line-height:1.6;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}
+.dshg-cf-head.dshg-cf-ours{color:var(--dsw-alias-state-business-primary)}
+.dshg-cf-head.dshg-cf-theirs{color:var(--dsw-alias-state-success-primary)}
+.dshg-cf-code{font-family:var(--dsh-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.55}
+.dshg-cf-line{display:grid;grid-template-columns:34px minmax(0,1fr);min-width:0}
+.dshg-cf-num{padding:0 6px;text-align:right;color:var(--dsw-alias-label-quaternary);user-select:none;font-variant-numeric:tabular-nums}
+.dshg-cf-text{padding-right:4px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.dshg-cf-ours .dshg-cf-line{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 6%,transparent)}
+.dshg-cf-theirs .dshg-cf-line{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 6%,transparent)}
+.dshg-cf-raw .dshg-cf-line:nth-child(odd){background:var(--dsw-alias-bg-layer-1)}
 
 /* ---- terminal ---- */
 .dshg-term{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base)}
