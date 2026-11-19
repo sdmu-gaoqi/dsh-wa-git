@@ -1,145 +1,74 @@
 # @wagq/dsh-git
 
-> DeepSeek Harness Web GUI 插件：会话标题栏多一枚 **Git 图标按钮**，点开是与 VS Code
-> 「源代码管理」同构的 Git 面板 —— 提交框、三段更改列表、内联 diff、分支切换、提交图、
-> **内嵌 Git 终端**，以及带历史改写能力的提交右键菜单。
+给 DeepSeek Harness 加一个 **Git 图形面板**。
 
-```
-conversation.session.header.utilities
-  └─ [Git ✱]  ← 点击
-       ┌──────────────────────────────────────────────┐
-       │ 源代码管理  (⑂ main)  ↑2 ↓0    ⟳  ⋯  ✕      │
-       ├──────────────────────────────────────────────┤
-       │ 更改 12   图表 30   终端                      │  ← 三个页签
-       ├──────────────────────────────────────────────┤
-       │ 消息（Ctrl+Enter 在 main 上提交）             │
-       │ [✓ 提交]                        [▾]           │
-       ├──────────────────────────────────────────────┤
-       │ ⌄ 暂存的更改                1  [−]            │
-       │   src/index.ts                          +278 M│
-       │ ⌄ 更改                      2  [↶] [+]        │
-       │   cordis.patch.yml                       +1 −1 M│
-       ├──────────────────────────────────────────────┤
-       │ @@ -1 +1 @@   README.md      +86 −47         │  ← 内联 diff
-       └──────────────────────────────────────────────┘
-```
+装好之后，每个会话的标题栏会多一枚 Git 图标。点一下就打开一个像 VS Code「源代码管理」的弹窗：看改动、看提交图、写提交消息、处理合并冲突，都能在里面完成，不用离开当前对话。
 
-## 五个入口
+![源代码管理面板](preview/scm-popup.png)
 
-| 位置 | 能做什么 |
-| --- | --- |
-| **分支胶囊**（头部） | 点击弹出分支选择器：本地分支带 ahead/behind，远程分支点一下自动创建同名跟踪分支；底部可直接输入新分支名创建 |
-| **↑↓ 徽标**（头部） | 点击打开「与远程对比」侧栏：`落后（远端有、本地没有）` / `领先（本地有、远端没有）` 两组提交，点任一提交跳到该提交详情 |
-| **⋯ 按钮**（头部） | 拉取 / 推送 / 抓取、切换分支、暂存全部、远程管理、打开终端、刷新（同步项会显示 `落后 N` / `领先 N`） |
-| **更改页签** | 暂存 / 取消暂存 / 放弃；点文件看 diff（**在右侧并排展开**，不挤占列表）；标题栏「并排 / 行内」可切换 |
-| **图表页签** | 点提交行 → 右侧展开该提交的作者、时间、改动文件与完整 patch；**右键**提交 → 见下表 |
-| **终端页签** | 内嵌 git 终端，仓库根目录为起点，自由输入任意命令 |
+## 它能做什么
 
-打开 diff / 提交详情 / 对比面板时，弹窗从 480px 自动加宽到 860px，正文变成左右两栏。
+### 查看和提交改动
 
-### 提交右键菜单
+- 「更改」页签列出所有改动，按 **暂存的更改 / 更改 / 未跟踪** 分组，和 VS Code 一样。
+- 点任意文件，右侧显示这个文件的 diff：默认是**并排视图**（左边旧、右边新），可以切换成单栏行内视图。
+- 每行右侧会显示改了多少行（`+12 −3`）和状态字母（`M` 修改、`A` 新增、`D` 删除、`U` 未跟踪）。
+- 鼠标移到某一行，右侧会出现快捷按钮：暂存、取消暂存、放弃更改。
+- 填好提交消息，按 `Ctrl+Enter` 或点「提交」即可提交。还可以勾选「修改上次提交」来 amend。
 
-| 菜单项 | 底层命令 | 说明 |
-| --- | --- | --- |
-| 复制提交哈希 | — | 完整 40 位 SHA 进剪贴板 |
-| 复制提交消息 | — | 提交标题 |
-| 恢复至当前提交 | `git revert --no-edit` | 生成一个反向提交，历史不改写 |
-| 软重置到此提交 | `git reset --soft` | HEAD 移动，改动全部留在暂存区 |
-| 混合重置到此提交 | `git reset --mixed` | HEAD 移动，改动留在工作区 |
-| 硬重置到此提交 | `git reset --hard` | **丢弃**工作区改动，二次确认 |
-| rebase 到此提交 | `git rebase` | 当前分支重放到该提交之上，二次确认 |
+### 用当前会话的模型生成提交消息
 
-## 它怎么工作
+提交框下面有一个 `✦ 生成提交消息` 按钮。点一下，插件会把当前的改动交给**这个会话正在使用的模型**，让它写一条提交消息，然后自动填进提交框。生成完可以直接改，再提交。
 
-两个半侧，同一个包：
+如果当前会话没选模型，就用你在设置里配的默认模型。要是模型没配密钥或被限流，按钮下面会直接告诉你原因。
 
-| 半侧 | 产物 | 职责 |
-| --- | --- | --- |
-| host（node） | `dist/index.js` | 在 `/wagq-git` 下注册 HTTP 路由；git 走 `execFile` + argv 数组 |
-| client（浏览器） | `dist/client.js` | 注册标题栏图标 + 弹窗；只 `fetch` 路由，不碰进程 |
+### 看提交图和远程对比
 
-浏览器侧不直接调 git，所以路径校验、错误归一化、diff 截断、退出码解析都只有一处实现。
+- 「图表」页签是一张分泳道的提交图，和 VS Code 的 Git Graph 类似。点任意提交，右侧展开这个提交的作者、时间、改动文件和完整 diff。
+- 右键提交行，可以：复制哈希、复制提交消息、撤销这个提交、重置到这个提交、rebase 到这个提交。重置和 rebase 会先弹窗确认。
+- 标题栏上的分支按钮点开可以切换分支、创建新分支。
+- 分支旁边的 `↑2 ↓1` 是和远程的差距，点开可以看到具体是哪些提交「领先」和「落后」，点其中一条直接跳到它的详情。
 
-### 路由
+### 拉取、推送和远程管理
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/sessions` | 会话 → 工作目录 |
-| GET | `/api/state?cwd=&limit=` | 仓库信息 + `status --porcelain=v1 -z` + `log --all --date-order` |
-| GET | `/api/diff?cwd=&path=&staged=&from=` | 工作区 unified patch |
-| GET | `/api/message?cwd=` | 基于暂存文件名的简易提交信息 |
-| POST | `/api/generate-message` | **用当前会话的模型**根据暂存差异生成提交消息 |
-| GET | `/api/compare?cwd=&limit=` | `HEAD...@{upstream}` 的双向提交列表（落后 / 领先） |
-| GET | `/api/branches?cwd=` | 本地/远程分支 + `%(upstream:track)` 解析出的 ahead/behind |
-| GET | `/api/remotes?cwd=` | 远端列表（fetch/push URL） |
-| GET | `/api/commit?cwd=&sha=` | 单个提交的元信息、改动文件、patch |
-| POST | `/api/stage` `/api/unstage` `/api/discard` | 暂存区操作 |
-| POST | `/api/commit` | `git commit -m`，支持 amend / signoff |
-| POST | `/api/sync` | `fetch` / `pull` / `push`，`push` 带 `--set-upstream` |
-| POST | `/api/checkout` | 切换分支，`create: true` 时新建 |
-| POST | `/api/branch-delete` | 删除分支 |
-| POST | `/api/remote-add` `/api/remote-remove` `/api/remote-url` | 远程管理 |
-| POST | `/api/commit-action` | `revert` / `reset-soft` / `reset-mixed` / `reset-hard` / `rebase` |
-| POST | `/api/terminal` | **内嵌终端**：命令 + 返回输出、退出码、耗时、执行后的 cwd |
+标题栏的 `⋯` 按钮里有：拉取（Pull）、推送（Push）、抓取（Fetch）、切换分支、暂存全部、远程管理、打开终端、刷新。菜单项上会带着实时的领先/落后数量。
 
-`/api/commit` 两个方法共用一条路径：GET 读提交详情，POST 创建提交。
+「远程管理」可以添加、修改、删除远端地址。
 
-### 终端为什么能 `cd`
+### 合并冲突
 
-没有 PTY。每条命令拼一段脚本，末尾打印 `sentinel\t$PWD\t$exit`，host 解析出新的工作目录并随响应返回，下一行命令以它为 `cwd` 启动。Windows 走 `powershell.exe`，其它平台走 `/bin/sh -lc`。
+仓库出现合并冲突时，改动列表顶部会出现一个红色的「合并冲突」分组。点冲突文件，右侧显示双方的完整内容（ours / theirs）和带冲突标记的原始文件：
 
-分隔符是 **TAB 而不是冒号** —— `C:\...` 里的冒号会把盘符切下来。
+- 点「采用当前分支」或「采用传入分支」即可解决整个文件的冲突（等价于编辑器里的 Accept Current / Accept Incoming）。
+- 想手动挑着改，可以用终端页签自己处理。
 
-所有 git 路由都过两道栅栏：`Host` 必须 loopback（防 DNS rebinding），`Origin` 必须同源、
-`Sec-Fetch-Site: cross-site` 直接 403。目录先 `realpath` 校验存在再交给 git。
+解决后冲突会从列表里消失。
 
-## 构建
+### 内嵌 Git 终端
+
+「终端」页签是一个挂在仓库目录下的命令行，可以敲任意命令，`git` 开头的尤其方便。会显示输出、退出码和耗时。`cd` 到子目录后，下一条命令会继续在那个目录里执行。支持上下键翻历史、`Ctrl+L` 清屏，下面还有几个常用命令的快捷按钮。
+
+## 安装
+
+需要本机装了 `git`，并且 `git` 在 PATH 里能直接运行。
+
+在项目目录的**父目录**执行（路径要写完整）：
 
 ```sh
-pnpm install
-pnpm run build      # tsc → dist/index.js；esbuild → dist/client.js（带 __ModuleLoader__ 外壳）
-pnpm run typecheck  # node 半侧 + 浏览器半侧分别过一遍类型
-pnpm run smoke      # 临时仓库跑全部路由 + react-dom/server 渲染按钮（48 项）
-pnpm run preview    # 无头 Chromium 截图，可加 --scene=changes|diff|graph|menu|context|branches|terminal|compare
-                    #   加 --alpha 模拟半透明皮肤，加 --measure 打印各栏实际尺寸
-node scripts/probe.mjs <url>   # 对运行中的实例读取真实令牌与弹窗计算样式
-```
-
-`dist/client.js` 必须以 `window.__ModuleLoader__.load({ id, factory })` 开头。裸包名
-（`require('react')`）留给宿主冻结的模块表解析；只有相对模块会被打进 bundle。
-
-## 安装到 profile
-
-```sh
-# 在插件目录的父级执行，`add` 的相对路径锚定调用目录
 dsh plugin --profile desktop add "link:D:/code/dsh plugin/dsh-wa-git"
 ```
 
-`cordis.patch.yml` 里 `name` 写的是**包名**，不是路径。
+然后打开或重启 DSH。标题栏出现 Git 图标就说明装好了。
 
-## 主题与皮肤兼容
+> 如果你是开发者、改了插件源码，需要进插件目录跑一次 `pnpm install && pnpm run build`，再刷新页面或重启 DSH。
 
-颜色只用 `--dsw-alias-*` 令牌（`label-*` / `bg-layer-*` / `border-l*` / `state-*` /
-`file-diff-*` / `scrollbar-*`），跟随宿主主题与皮肤。提交图泳道色是 `hsl()` 常量——它
-表达「哪条分支」而非语义，深浅主题下都验过对比度。
+## 常见问题
 
-**弹窗底色永远不透明。** 皮肤（如 `abyss`）会把 `--dsw-alias-bg-layer-*` **甚至 `--dsw-alias-bg-base`**
-声明成带 alpha 的颜色，好让背景艺术画透出来；浮层如果直接继承，页面上的文字就会从弹窗里读出来。
-而且 `color-mix(x 100%, transparent)` **并不会**把 alpha 提到 1——100% 权重的结果就是 `x` 原样。
+- **看不到 Git 图标？** 确认刚才的 `dsh plugin add` 用的是 desktop profile，然后重启 DSH。
+- **点开提示「没有可用的工作目录」？** 先打开一个工作区里的会话，再点图标。
+- **生成提交消息报错？** 通常是当前模型没配好密钥、或者被限流了，报错信息里会写明原因。换一个已在设置里配好的模型再试。
+- **冲突点「采用」没反应？** 确认这个文件确实处于冲突状态；如果已经手动改完标记，先在终端里 `git add <文件>`。
 
-所以每个浮层自己合成底色，用两条声明：
+## 授权说明
 
-```css
-background-color: var(--dsw-alias-bg-base);        /* 不透明地板 */
-background-image: linear-gradient(L, L), linear-gradient(L, L), linear-gradient(L, L);  /* 主题色叠三层 */
-```
-
-layer 叠在不透明地板之上，剩余 alpha 再靠重复叠层几何收敛。菜单 / 确认框 / 分支选择器各自带这份
-配方——它们是 `.dshg-root` 的**兄弟节点**（必须逃出 dialog 的 `overflow:hidden`），不能指望继承
-dialog 上的变量。
-
-`pnpm run preview --scene=context --alpha` 用 50% alpha 的令牌复现皮肤场景，配合 `--measure`
-打印菜单实际计算出的 `background` 确认是 `rgb(...)` 而不是 `rgba(...,0.5)`。
-
-元素带 `data-dsh-plugin="wagq-dsh-git"` / `data-dsh-part="scm-button|scm-popup"` /
-`data-dsh-surface="overlay"`，符合 dsh-web 的皮肤契约。
+这个插件在你本地运行 git 命令；「生成提交消息」会把**当前暂存区的 diff** 发给当前会话使用的模型服务。除此之外不会上传仓库里的其它内容。
