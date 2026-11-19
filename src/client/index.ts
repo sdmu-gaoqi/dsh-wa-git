@@ -15,7 +15,7 @@
  */
 import type { ClientContext } from './context'
 import { GitHeaderButton, ensureStyles, removeStyles } from './ScmPanel'
-import type { UseSessions } from './ScmPanel'
+import type { UseSessions, UseWorkspaces } from './ScmPanel'
 
 export const name = 'wagq-dsh-git-client'
 
@@ -27,6 +27,7 @@ const GLOBAL_SLOT = 'conversation.header.leading'
 interface SlotProps {
   sessionId?: string
   useSessions?: UseSessions
+  useWorkspaces?: UseWorkspaces
 }
 
 export function apply(ctx: ClientContext): void {
@@ -51,7 +52,13 @@ export function apply(ctx: ClientContext): void {
             id: 'wagq-dsh-git',
             order: 30,
           },
-          (props) => GitHeaderButton({ sessionId: props?.sessionId, useSessions: props?.useSessions, variant: 'session' }),
+          (props) =>
+            GitHeaderButton({
+              sessionId: props?.sessionId,
+              useSessions: props?.useSessions,
+              useWorkspaces: props?.useWorkspaces,
+              variant: 'session',
+            }),
         ),
       ),
     'wagq-dsh-git: session-header-button',
@@ -60,12 +67,19 @@ export function apply(ctx: ClientContext): void {
   // Root-scoped fallback, rendered on the blank home screen too. DSH's slot
   // contract explicitly marks conversation.header.leading as "available without
   // a Session", which is exactly the missing-entry case reported by the user.
+  // `useSessions` and `useWorkspaces` are standard props on this slot too, so
+  // the blank new-session screen can resolve the selected workspace's cwd.
   ctx.effect(
     () =>
       ctx.slots.inject(GLOBAL_SLOT, () =>
-        ctx.slots.register(
+        ctx.slots.register<SlotProps>(
           { name: GLOBAL_SLOT, id: 'wagq-dsh-git-global', order: 30 },
-          () => GitHeaderButton({ variant: 'global' }),
+          (props) =>
+            GitHeaderButton({
+              variant: 'global',
+              useSessions: props?.useSessions,
+              useWorkspaces: props?.useWorkspaces,
+            }),
         ),
       ),
     'wagq-dsh-git: global-header-button',

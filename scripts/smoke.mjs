@@ -144,6 +144,14 @@ async function testHost() {
   assert.ok(state.json.changes.some((entry) => entry.path === 'README.md'), 'modified file listed')
   ok('GET /api/state 解析分支 / 更改 / 提交图')
 
+  // Blank cwd (e.g. the blank new-session screen) must fall back to the
+  // plugin's process cwd, not throw "缺少工作目录". Regression: `??` does not
+  // treat an empty query value as absent.
+  const blankCwd = await callRoute(route.handler, { url: '/wagq-git/api/state?cwd=' })
+  assert.notEqual(blankCwd.status, 400, blankCwd.text)
+  assert.notEqual(blankCwd.status, 404, blankCwd.text)
+  ok('空 cwd 回退到进程目录，不报缺少工作目录')
+
   const diff = await callRoute(route.handler, {
     url: `/wagq-git/api/diff?cwd=${encoded}&path=${encodeURIComponent('README.md')}&staged=0&from=`,
   })

@@ -192,6 +192,15 @@ function requiredString(value: unknown, field: string): string {
 }
 
 /**
+ * An empty `cwd=` query parameter is a real string, so `??` does not fall back
+ * and `resolveRepoDir('')` throws "缺少工作目录". Blank means "no directory was
+ * chosen" (e.g. the blank new-session screen), so treat it as absent instead.
+ */
+function cwdOrFallback(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() !== '' ? value : fallback
+}
+
+/**
  * Live sessions → `{ id, cwd, title }`. The browser half uses this when the
  * slot did not hand it a session id, so the popup still lands on the right repo.
  */
@@ -251,7 +260,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           const [snapshot, commits] = await Promise.all([
             status(cwd),
             graph(cwd, Number(url.searchParams.get('limit') ?? 60)),
@@ -265,7 +274,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           const path = requiredString(url.searchParams.get('path'), 'path')
           const staged = url.searchParams.get('staged') === '1'
           const from = url.searchParams.get('from') ?? ''
@@ -279,7 +288,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           sendJson(res, 200, { ok: true, message: await suggestMessage(cwd) })
           return
         }
@@ -289,7 +298,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           sendJson(res, 200, { ok: true, branches: await branches(cwd) })
           return
         }
@@ -299,7 +308,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           sendJson(res, 200, { ok: true, remotes: await remotes(cwd) })
           return
         }
@@ -309,7 +318,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           sendJson(res, 200, { ok: true, ...(await compare(cwd, Number(url.searchParams.get('limit') ?? 40))) })
           return
         }
@@ -319,7 +328,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           sendJson(res, 200, { ok: true, ...(await listFiles(cwd, url.searchParams.get('dir') ?? '')) })
           return
         }
@@ -329,7 +338,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           const content = await readFileContent(cwd, url.searchParams.get('path') ?? '')
           sendJson(res, 200, { ok: true, ...content })
           return
@@ -341,7 +350,7 @@ export function apply(ctx: HostContext) {
             return
           }
           const bodyWrite = await readBody(req)
-          const cwd = await resolveRepoDir(typeof bodyWrite.cwd === 'string' ? bodyWrite.cwd : fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(bodyWrite.cwd, fallbackCwd))
           const path = requiredString(bodyWrite.path, 'path')
           const text = typeof bodyWrite.text === 'string' ? bodyWrite.text : ''
           const result = await writeFileContent(cwd, path, text)
@@ -354,7 +363,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           const commits = await fileHistory(cwd, url.searchParams.get('path') ?? '')
           sendJson(res, 200, { ok: true, commits })
           return
@@ -366,7 +375,7 @@ export function apply(ctx: HostContext) {
             return
           }
           const bodyOpen = await readBody(req)
-          const cwd = await resolveRepoDir(typeof bodyOpen.cwd === 'string' ? bodyOpen.cwd : fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(bodyOpen.cwd, fallbackCwd))
           const target = requiredString(bodyOpen.target, 'target')
           try {
             await openInFileManager(cwd, target, bodyOpen.reveal === true)
@@ -383,7 +392,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           const sha = requiredString(url.searchParams.get('sha'), 'sha')
           const path = requiredString(url.searchParams.get('path'), 'path')
           sendJson(res, 200, { ok: true, ...(await commitFileContent(cwd, sha, path)) })
@@ -395,7 +404,7 @@ export function apply(ctx: HostContext) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           const paths = url.searchParams.get('paths')
           const list = paths === null || paths === ''
             ? (await status(cwd)).changes.filter((entry) => entry.kind === 'conflicted').map((entry) => entry.path)
@@ -412,7 +421,7 @@ export function apply(ctx: HostContext) {
             return
           }
           const bodyGen = await readBody(req)
-          const cwd = await resolveRepoDir(typeof bodyGen.cwd === 'string' ? bodyGen.cwd : fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(bodyGen.cwd, fallbackCwd))
           const sessionId = typeof bodyGen.sessionId === 'string' ? bodyGen.sessionId : ''
           const result = await generateCommitMessage(ctx, cwd, sessionId)
           sendJson(res, 200, { ok: true, ...result })
@@ -421,7 +430,7 @@ export function apply(ctx: HostContext) {
 
         // `/api/commit` answers both: GET reads a commit's detail, POST creates one.
         if (url.pathname === `${PREFIX}/api/commit` && req.method === 'GET') {
-          const cwd = await resolveRepoDir(url.searchParams.get('cwd') ?? fallbackCwd)
+          const cwd = await resolveRepoDir(cwdOrFallback(url.searchParams.get('cwd'), fallbackCwd))
           const sha = requiredString(url.searchParams.get('sha'), 'sha')
           sendJson(res, 200, { ok: true, commit: await commitDetail(cwd, sha) })
           return
@@ -433,7 +442,7 @@ export function apply(ctx: HostContext) {
         }
 
         const body = await readBody(req)
-        const cwd = await resolveRepoDir(typeof body.cwd === 'string' ? body.cwd : fallbackCwd)
+        const cwd = await resolveRepoDir(cwdOrFallback(body.cwd, fallbackCwd))
 
         if (url.pathname === `${PREFIX}/api/stage`) {
           await stage(cwd, pathList(body.paths))

@@ -1222,6 +1222,19 @@ function Popup(props: PopupProps): React.ReactElement {
   const conflicts = state?.changes.filter((entry) => entry.kind === 'conflicted') ?? []
 
   const bodyForTab = (): React.ReactNode => {
+    // No repository could be resolved (e.g. the blank new-session screen).
+    // Do not fall through to FileBrowser/Terminal: passing an empty cwd to the
+    // host makes them call the API with `cwd=` and surface "缺少工作目录" or,
+    // worse, fall back to the host process directory (the C drive).
+    if (cwd === '') {
+      return React.createElement(
+        'div',
+        { className: 'dshg-empty' },
+        React.createElement(Icon, { name: 'git' }),
+        React.createElement('div', { className: 'dshg-empty-title' }, '尚未确定仓库'),
+        React.createElement('div', { className: 'dshg-empty-body' }, '请先进入一个属于工作区的会话，再打开源代码管理。'),
+      )
+    }
     if (tab === 'terminal') return React.createElement(Terminal, { cwd, active: tab === 'terminal' })
     if (tab === 'files') {
       return React.createElement(FileBrowser, {
@@ -1581,7 +1594,7 @@ function Popup(props: PopupProps): React.ReactElement {
               state.repo.branch,
               state.repo.detached ? React.createElement('span', { className: 'dshg-branch-tag' }, 'detached') : null,
             )
-          : React.createElement('span', { className: 'dshg-repo' }, cwd === '' ? '未绑定工作目录' : cwd),
+          : React.createElement('span', { className: 'dshg-repo' }, cwd === '' ? '请选择会话' : cwd),
         state !== null && (ahead > 0 || behind > 0)
           ? React.createElement(
               'button',
@@ -1807,6 +1820,7 @@ function sameSessionId(a: string, b: string): boolean {
 
 interface SessionRowLike {
   cwd?: string
+  updatedAt?: number | string
 }
 
 interface SessionsStoreState {
@@ -1815,8 +1829,21 @@ interface SessionsStoreState {
   byId?: Record<string, SessionRowLike>
 }
 
+interface WorkspaceItem {
+  workspaceId?: string
+  cwd?: string
+  sessionIds?: string[]
+  createdAt?: string
+}
+
+interface WorkspacesStoreState {
+  items?: WorkspaceItem[]
+  phase?: string
+}
+
 /** The framework injects this standard prop into every session-scoped slot. */
 export type UseSessions = <T>(selector: (state: SessionsStoreState) => T) => T
+export type UseWorkspaces = <T>(selector: (state: WorkspacesStoreState) => T) => T
 
 export interface GitHeaderButtonProps {
   /** Injected by the slot (scope: session). */
@@ -1827,6 +1854,11 @@ export interface GitHeaderButtonProps {
    * that the `/sessions` HTTP route has.
    */
   useSessions?: UseSessions
+  /**
+   * Standard prop giving access to the workspace list, each with its `cwd`.
+   * Used on the blank new-session screen to open the selected workspace.
+   */
+  useWorkspaces?: UseWorkspaces
   /** Optional direct directory override. */
   cwd?: string
   /**
@@ -1870,17 +1902,69 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
       return undefined
     }
     // No session id (the blank "new session" screen still shows this button).
-    // Use the most recently listed session — never a hard-coded first entry,
-    // which is what previously displayed an unrelated project's repository.
+    // Fall back to the newest session's cwd; the workspace store below is a
+    // better source and takes priority when available.
     const ids = state.ids
     const newest = Array.isArray(ids) && ids.length > 0 ? ids[ids.length - 1] : undefined
     const fromNewest = newest === undefined ? undefined : byId[newest]?.cwd
     if (typeof fromNewest === 'string' && fromNewest !== '') return fromNewest
-    for (const row of Object.values(byId)) {
-      if (typeof row?.cwd === 'string' && row.cwd !== '') return row.cwd
-    }
     return undefined
   })
+
+  // The workspace store is the authoritative source for the directory shown in
+  // the sidebar. Each workspace carries its own `cwd`. When a session id is
+  // known, find the workspace that owns it. This makes a session button open
+  // exactly the repository its workspace points at.
+  const workspaceItems = props.useWorkspaces?.((state) => state.items)
+  const normSession = (a: string, b: string): boolean => {
+    const strip = (v: string): string => v.replace(/^session-/, '')
+    return strip(a) !== '' && strip(a) === strip(b)
+  }
+  const ownerWorkspaceCwd = (() => {
+    const wanted = props.sessionId
+    if (wanted === undefined || !Array.isArray(workspaceItems)) return undefined
+    const owner = workspaceItems.find((item) =>
+      Array.isArray(item.sessionIds) && item.sessionIds.some((id) => normSession(id, wanted)),
+    )
+    return owner && typeof owner.cwd === 'string' && owner.cwd !== '' ? owner.cwd : undefined
+  })()
+
+  // On the blank new-session screen there is no session id. Mirror DSH's own
+  // `recentWorkspace`: pick the workspace whose sessions were updated most
+  // recently. This is the workspace the new-session draft targets, so opening
+  // the panel there must show that workspace's cwd — not the host's C drive.
+  const recentWorkspaceCwd = (() => {
+    if (props.sessionId !== undefined || !Array.isArray(workspaceItems) || workspaceItems.length === 0) {
+      return undefined
+    }
+    const sessions = props.useSessions?.((state) => state.byId) ?? {}
+    const updatedAt = (v: number | string | undefined): number => {
+      if (typeof v === 'number') return Number.isFinite(v) ? v : Number.NEGATIVE_INFINITY
+      const t = Date.parse(v ?? '')
+      return Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t
+    }
+    let best: WorkspaceItem | undefined
+    let bestTime = Number.NEGATIVE_INFINITY
+    for (const item of workspaceItems) {
+      if (typeof item.cwd !== 'string' || item.cwd === '') continue
+      let latest = Number.NEGATIVE_INFINITY
+      if (Array.isArray(item.sessionIds)) {
+        for (const id of item.sessionIds) {
+          const rowKey = Object.keys(sessions).find((key) => normSession(key, id))
+          if (rowKey !== undefined) latest = Math.max(latest, updatedAt(sessions[rowKey]?.updatedAt))
+        }
+      }
+      if (latest === Number.NEGATIVE_INFINITY) latest = Date.parse(item.createdAt ?? '')
+      if (Number.isNaN(latest)) latest = Number.NEGATIVE_INFINITY
+      if (best === undefined || latest > bestTime) {
+        best = item
+        bestTime = latest
+      }
+    }
+    return best?.cwd
+  })()
+
+  const workspaceCwd = ownerWorkspaceCwd ?? recentWorkspaceCwd
 
   // `cwd` is resolved per session and must be dropped when the button is
   // re-used for a different session; otherwise switching conversations keeps
@@ -1897,10 +1981,12 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
 
   React.useEffect(() => {
     if (!open || resolving) return
-    // Store already knows this session's cwd — use it directly and stay in sync
-    // when the user switches the session's working directory.
-    if (!global && typeof storeCwd === 'string' && storeCwd !== '') {
-      setCwd((prev) => (prev === storeCwd ? prev : storeCwd))
+    // Prefer the workspace store: it is what the sidebar shows and carries its
+    // own cwd, so the blank new-session screen opens the selected workspace.
+    // The sessions store is the fallback for session-scoped buttons.
+    const resolved = workspaceCwd ?? storeCwd
+    if (typeof resolved === 'string' && resolved !== '') {
+      setCwd((prev) => (prev === resolved ? prev : resolved))
       return
     }
     if (cwd !== '') return
@@ -1915,9 +2001,8 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
         // the panel show project A while the user was working in project B.
         const hit = wanted === '' ? undefined : result.sessions.find((row) => sameSessionId(row.id, wanted))
         if (hit === undefined) {
-          // The global button (or a session the host has not listed yet) falls
-          // back to the plugin's own working directory: the host routes resolve
-          // an empty cwd to process.cwd(), which is still a real repo.
+          // No directory could be determined. Leave cwd empty: the host now
+          // falls back to process.cwd() for blank cwd instead of erroring.
           setCwd('')
           return
         }
@@ -1925,7 +2010,7 @@ export function GitHeaderButton(props: GitHeaderButtonProps): React.ReactElement
       })
       .catch((err: unknown) => setResolveError(err instanceof Error ? err.message : String(err)))
       .finally(() => setResolving(false))
-  }, [open, cwd, resolving, global, props.sessionId, storeCwd])
+  }, [open, cwd, resolving, global, props.sessionId, storeCwd, workspaceCwd])
 
   return React.createElement(
     React.Fragment,

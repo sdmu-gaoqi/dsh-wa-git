@@ -3237,6 +3237,15 @@ function Popup(props) {
   const ahead = state?.repo.ahead ?? 0;
   const conflicts = state?.changes.filter((entry) => entry.kind === "conflicted") ?? [];
   const bodyForTab = () => {
+    if (cwd === "") {
+      return React9.createElement(
+        "div",
+        { className: "dshg-empty" },
+        React9.createElement(Icon5, { name: "git" }),
+        React9.createElement("div", { className: "dshg-empty-title" }, "\u5C1A\u672A\u786E\u5B9A\u4ED3\u5E93"),
+        React9.createElement("div", { className: "dshg-empty-body" }, "\u8BF7\u5148\u8FDB\u5165\u4E00\u4E2A\u5C5E\u4E8E\u5DE5\u4F5C\u533A\u7684\u4F1A\u8BDD\uFF0C\u518D\u6253\u5F00\u6E90\u4EE3\u7801\u7BA1\u7406\u3002")
+      );
+    }
     if (tab === "terminal") return React9.createElement(Terminal, { cwd, active: tab === "terminal" });
     if (tab === "files") {
       return React9.createElement(FileBrowser, {
@@ -3553,7 +3562,7 @@ ${commit.subject}`,
           React9.createElement(Icon5, { name: "branch" }),
           state.repo.branch,
           state.repo.detached ? React9.createElement("span", { className: "dshg-branch-tag" }, "detached") : null
-        ) : React9.createElement("span", { className: "dshg-repo" }, cwd === "" ? "\u672A\u7ED1\u5B9A\u5DE5\u4F5C\u76EE\u5F55" : cwd),
+        ) : React9.createElement("span", { className: "dshg-repo" }, cwd === "" ? "\u8BF7\u9009\u62E9\u4F1A\u8BDD" : cwd),
         state !== null && (ahead > 0 || behind > 0) ? React9.createElement(
           "button",
           {
@@ -3772,11 +3781,52 @@ function GitHeaderButton(props) {
     const newest = Array.isArray(ids) && ids.length > 0 ? ids[ids.length - 1] : void 0;
     const fromNewest = newest === void 0 ? void 0 : byId[newest]?.cwd;
     if (typeof fromNewest === "string" && fromNewest !== "") return fromNewest;
-    for (const row of Object.values(byId)) {
-      if (typeof row?.cwd === "string" && row.cwd !== "") return row.cwd;
-    }
     return void 0;
   });
+  const workspaceItems = props.useWorkspaces?.((state) => state.items);
+  const normSession = (a, b) => {
+    const strip = (v) => v.replace(/^session-/, "");
+    return strip(a) !== "" && strip(a) === strip(b);
+  };
+  const ownerWorkspaceCwd = (() => {
+    const wanted = props.sessionId;
+    if (wanted === void 0 || !Array.isArray(workspaceItems)) return void 0;
+    const owner = workspaceItems.find(
+      (item) => Array.isArray(item.sessionIds) && item.sessionIds.some((id) => normSession(id, wanted))
+    );
+    return owner && typeof owner.cwd === "string" && owner.cwd !== "" ? owner.cwd : void 0;
+  })();
+  const recentWorkspaceCwd = (() => {
+    if (props.sessionId !== void 0 || !Array.isArray(workspaceItems) || workspaceItems.length === 0) {
+      return void 0;
+    }
+    const sessions = props.useSessions?.((state) => state.byId) ?? {};
+    const updatedAt = (v) => {
+      if (typeof v === "number") return Number.isFinite(v) ? v : Number.NEGATIVE_INFINITY;
+      const t = Date.parse(v ?? "");
+      return Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t;
+    };
+    let best;
+    let bestTime = Number.NEGATIVE_INFINITY;
+    for (const item of workspaceItems) {
+      if (typeof item.cwd !== "string" || item.cwd === "") continue;
+      let latest = Number.NEGATIVE_INFINITY;
+      if (Array.isArray(item.sessionIds)) {
+        for (const id of item.sessionIds) {
+          const rowKey = Object.keys(sessions).find((key) => normSession(key, id));
+          if (rowKey !== void 0) latest = Math.max(latest, updatedAt(sessions[rowKey]?.updatedAt));
+        }
+      }
+      if (latest === Number.NEGATIVE_INFINITY) latest = Date.parse(item.createdAt ?? "");
+      if (Number.isNaN(latest)) latest = Number.NEGATIVE_INFINITY;
+      if (best === void 0 || latest > bestTime) {
+        best = item;
+        bestTime = latest;
+      }
+    }
+    return best?.cwd;
+  })();
+  const workspaceCwd = ownerWorkspaceCwd ?? recentWorkspaceCwd;
   const resolvedFor = React9.useRef(void 0);
   React9.useEffect(() => {
     if (resolvedFor.current !== props.sessionId) {
@@ -3787,8 +3837,9 @@ function GitHeaderButton(props) {
   }, [props.sessionId, props.cwd]);
   React9.useEffect(() => {
     if (!open || resolving) return;
-    if (!global && typeof storeCwd === "string" && storeCwd !== "") {
-      setCwd((prev) => prev === storeCwd ? prev : storeCwd);
+    const resolved = workspaceCwd ?? storeCwd;
+    if (typeof resolved === "string" && resolved !== "") {
+      setCwd((prev) => prev === resolved ? prev : resolved);
       return;
     }
     if (cwd !== "") return;
@@ -3803,7 +3854,7 @@ function GitHeaderButton(props) {
       }
       setCwd(hit.cwd);
     }).catch((err) => setResolveError(err instanceof Error ? err.message : String(err))).finally(() => setResolving(false));
-  }, [open, cwd, resolving, global, props.sessionId, storeCwd]);
+  }, [open, cwd, resolving, global, props.sessionId, storeCwd, workspaceCwd]);
   return React9.createElement(
     React9.Fragment,
     null,
@@ -3849,7 +3900,12 @@ function apply(ctx) {
           id: "wagq-dsh-git",
           order: 30
         },
-        (props) => GitHeaderButton({ sessionId: props?.sessionId, useSessions: props?.useSessions, variant: "session" })
+        (props) => GitHeaderButton({
+          sessionId: props?.sessionId,
+          useSessions: props?.useSessions,
+          useWorkspaces: props?.useWorkspaces,
+          variant: "session"
+        })
       )
     ),
     "wagq-dsh-git: session-header-button"
@@ -3859,7 +3915,11 @@ function apply(ctx) {
       GLOBAL_SLOT,
       () => ctx.slots.register(
         { name: GLOBAL_SLOT, id: "wagq-dsh-git-global", order: 30 },
-        () => GitHeaderButton({ variant: "global" })
+        (props) => GitHeaderButton({
+          variant: "global",
+          useSessions: props?.useSessions,
+          useWorkspaces: props?.useWorkspaces
+        })
       )
     ),
     "wagq-dsh-git: global-header-button"
