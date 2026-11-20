@@ -281,12 +281,37 @@ export async function status(cwd: string): Promise<StatusSnapshot> {
   const staged = entries.filter((entry) => entry.kind === 'staged' && entry.index !== ' ')
   const changes = entries.filter((entry) => entry.kind === 'unstaged' || entry.kind === 'conflicted')
   const untracked = entries.filter((entry) => entry.kind === 'untracked')
+  // VS Code hides untracked directories that are themselves git repositories
+  // (they contain a `.git`). `git status` lists them as `?? dir/`, but `git add`
+  // on them fails with "does not have a commit checked out". Showing them here
+  // produces a phantom entry the user cannot stage, so drop them — matching
+  // VS Code's Source Control behaviour.
+  const visibleUntracked: StatusEntry[] = []
+  for (const entry of untracked) {
+    if (await isNestedRepo(cwd, entry.path)) continue
+    visibleUntracked.push(entry)
+  }
   return {
     repo,
     staged,
     changes,
-    untracked,
-    stats: await numstat(cwd, [...staged, ...changes, ...untracked]),
+    untracked: visibleUntracked,
+    stats: await numstat(cwd, [...staged, ...changes, ...visibleUntracked]),
+  }
+}
+
+/**
+ * True when `relPath` is a directory holding its own `.git` (a nested repo or
+ * an uninitialised submodule). Ports VS Code's rule for hiding such folders
+ * from the untracked list.
+ */
+async function isNestedRepo(cwd: string, relPath: string): Promise<boolean> {
+  try {
+    const gitPath = join(cwd, relPath, '.git')
+    const info = await stat(gitPath)
+    return info.isDirectory() || info.isFile()
+  } catch {
+    return false
   }
 }
 

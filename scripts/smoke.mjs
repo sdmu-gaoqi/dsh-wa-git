@@ -144,6 +144,24 @@ async function testHost() {
   assert.ok(state.json.changes.some((entry) => entry.path === 'README.md'), 'modified file listed')
   ok('GET /api/state 解析分支 / 更改 / 提交图')
 
+  // A nested git repository (a directory with its own `.git`, like an
+  // uninitialised submodule) must be hidden from the untracked list, matching
+  // VS Code. Git lists it as `?? dir/` but `git add` on it fails, so showing it
+  // here produces a phantom row the user cannot act on.
+  const nested = path.join(dir, 'nested-repo')
+  fs.mkdirSync(path.join(nested, '.git'), { recursive: true })
+  const withNested = await callRoute(route.handler, { url: `/wagq-git/api/state?cwd=${encoded}` })
+  assert.equal(withNested.status, 200, withNested.text)
+  assert.ok(
+    !withNested.json.untracked.some((entry) => entry.path.startsWith('nested-repo')),
+    'nested git repository hidden from untracked',
+  )
+  assert.ok(
+    withNested.json.untracked.some((entry) => entry.path === 'new file.txt'),
+    'ordinary untracked files still listed',
+  )
+  ok('嵌套 git 仓库不显示为未跟踪（对齐 VS Code）')
+
   // Blank cwd (e.g. the blank new-session screen) must fall back to the
   // plugin's process cwd, not throw "缺少工作目录". Regression: `??` does not
   // treat an empty query value as absent.
@@ -563,11 +581,14 @@ async function testHost() {
   assert.equal(calls[0].model, 'fake-model')
   assert.equal(typeof calls[0].system, 'string', 'system goes in its own option')
   assert.ok(calls[0].system.includes('commit message'), 'system says what to produce')
+  assert.ok(/Conventional Commits/i.test(calls[0].system), 'system requires Conventional Commits')
+  assert.ok(calls[0].system.includes('feat') && calls[0].system.includes('fix'), 'system lists allowed types')
   const sent = JSON.stringify(calls[0].messages)
   assert.ok(sent.includes('gen.txt'), 'prompt carries the changed file')
   assert.ok(sent.includes('+hello'), 'prompt carries the diff hunk')
+  assert.ok(/Recent commit messages/i.test(sent), 'prompt carries history examples')
   assert.ok(!sent.includes('You write git commit messages'), 'system is NOT inside messages')
-  ok('生成请求带上文件清单与差异并走会话模型')
+  ok('生成请求带上文件清单、差异与提交历史示例，并要求 conventional 格式')
 
   // `prepareCall` is the path the real host exposes; the prepared config must be
   // what actually reaches stream().
@@ -600,6 +621,28 @@ async function testHost() {
   assert.equal(preparedCalls.length, 1)
   assert.equal(preparedCalls[0].temperature, 0.2, 'prepared config is forwarded')
   ok('prepareCall 的 config 会透传给 stream')
+
+  // If the model ignores the format, the subject still gets a Conventional
+  // Commits type automatically (inferred from the wording).
+  ctx.get = ((original) => (name) => {
+    if (name === 'llm') {
+      return {
+        stream: async function* () {
+          yield { type: 'text-delta', text: '修复登录后页面崩溃的问题' }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        },
+      }
+    }
+    return original(name)
+  })(ctx.get)
+  const genPlain = await callRoute(route.handler, {
+    method: 'POST',
+    url: '/wagq-git/api/generate-message',
+    body: { cwd: dir, sessionId: 'session-1' },
+  })
+  assert.equal(genPlain.status, 200, genPlain.text)
+  assert.match(genPlain.json.message, /^fix: 修复登录后页面崩溃的问题$/, 'plain message gets a fix: prefix')
+  ok('模型忽略格式时自动补 conventional type 前缀')
 
   // A model that returns nothing must not produce an empty commit message.
   ctx.get = ((original) => (name) => {

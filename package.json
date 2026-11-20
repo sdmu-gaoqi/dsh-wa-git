@@ -1,6 +1,6 @@
 {
   "name": "@wagq/dsh-git",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "在 DSH 会话标题栏加一枚 Git 按钮：像 VS Code 一样查看改动、提交、提交图、分支与远程、解决冲突，并支持用当前会话模型生成提交消息、内嵌 Git 终端和仓库文件浏览。",
   "license": "MIT",
   "keywords": [

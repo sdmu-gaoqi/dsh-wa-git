@@ -40,17 +40,76 @@ async function stagedPatch(cwd) {
     return { patch, staged, files };
 }
 const SYSTEM_PROMPT = [
-    'You write git commit messages.',
+    'You write git commit messages following the Conventional Commits specification.',
     'Answer with ONE commit message and nothing else: no quotes, no code fences, no explanation.',
-    'First line: imperative mood, at most 72 characters, no trailing period.',
-    'Use the same language as the existing repository history when it is visible; otherwise English.',
+    'The subject line MUST start with a type prefix in the exact form `type(scope): subject` or `type: subject`.',
+    'Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.',
+    'Use `feat` for new features, `fix` for bug fixes, `refactor` for code changes that neither add a feature nor fix a bug, `chore` for maintenance/dependencies/config.',
+    'The `scope` in parentheses is optional; use a short noun for the affected area when it adds clarity.',
+    'Keep the whole subject line at most 72 characters; use imperative mood and no trailing period.',
+    'Write the subject in the same language as the recent commit examples when provided; otherwise English.',
+    'Match the exact prefix style of the recent commit examples above all else.',
     'If the change spans unrelated concerns, add a blank line and 1-3 short bullet points.',
 ].join(' ');
-function buildUserPrompt(files, patch, staged) {
+/**
+ * A few recent commit subjects, fed to the model as format examples so the
+ * generated prefix style matches the repository's own convention (language,
+ * whether a scope is used, etc.). Best effort: returns [] if history is absent.
+ */
+async function recentSubjects(cwd, limit = 8) {
+    const raw = await gitOrThrow(cwd, ['log', '-n', String(limit), '--pretty=format:%s']).catch(() => '');
+    return raw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '');
+}
+function matchesConventional(message) {
+    const first = message.split('\n')[0] ?? '';
+    return /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?:\s+\S/.test(first);
+}
+/**
+ * Normalise the model's answer so the subject always has a valid type prefix.
+ * If the model already produced a Conventional Commits subject, keep it as-is.
+ * Otherwise infer the most likely type from the message wording and the changed
+ * paths, and prepend it. Body/bullet lines below the subject are preserved.
+ */
+function ensureConventional(message, examples) {
+    if (matchesConventional(message))
+        return message;
+    const lines = message.split('\n');
+    const subject = (lines[0] ?? '').trim().replace(/[。.]\s*$/, '');
+    const rest = lines.slice(1);
+    if (subject === '')
+        return message;
+    const lower = subject.toLowerCase();
+    let type = 'chore';
+    // Note: `\b` is an ASCII word boundary and never matches next to CJK, so
+    // Chinese keywords are tested as plain substrings; English ones use `\b`.
+    if (/修复|修正|解决|报错|崩溃|失效|\b(fix|bug|repair|correct)\b/.test(lower))
+        type = 'fix';
+    else if (/新增|增加|添加|实现|支持|\b(add|feat|feature|implement|support)\b/.test(lower))
+        type = 'feat';
+    else if (/文档|注释|说明|\b(doc|docs|readme|comment)\b/.test(lower))
+        type = 'docs';
+    else if (/测试|单测|\b(test|tests|spec)\b/.test(lower))
+        type = 'test';
+    else if (/重构|重命名|整理|\b(refactor|rename|move|cleanup)\b/.test(lower))
+        type = 'refactor';
+    else if (/性能|优化|加速|\b(perf|speed|optimize)\b/.test(lower))
+        type = 'perf';
+    const prefix = `${type}: `;
+    // Avoid duplicating a type the model may have written in prose (e.g. "fix a bug").
+    const body = subject.startsWith(prefix) ? subject : prefix + subject.charAt(0).toLowerCase() + subject.slice(1);
+    return [body, ...rest].join('\n');
+}
+function buildUserPrompt(files, patch, staged, examples) {
     const trimmed = patch.length > MAX_DIFF_CHARS ? `${patch.slice(0, MAX_DIFF_CHARS)}\n… (truncated)` : patch;
     const scope = staged ? 'staged for commit' : 'modified in the working tree (nothing is staged)';
     return [
         `These changes are ${scope}.`,
+        examples.length === 0
+            ? ''
+            : ['Recent commit messages in this repository (copy their exact `type(scope): subject` style):', ...examples.map((s) => `- ${s}`)].join('\n'),
         files.length === 0 ? '' : `Files:\n${files.slice(0, 60).join('\n')}`,
         '',
         'Diff:',
@@ -88,6 +147,7 @@ export async function generateCommitMessage(ctx, cwd, sessionId) {
     if (patch.trim() === '' && files.length === 0) {
         throw new GitError('没有可用来生成提交消息的改动', 409);
     }
+    const examples = await recentSubjects(cwd);
     const llm = ctx.get('llm');
     if (llm === undefined) {
         throw new GitError('当前 profile 没有挂载模型服务（llm）', 503);
@@ -96,7 +156,7 @@ export async function generateCommitMessage(ctx, cwd, sessionId) {
     // `messages` gets it dropped by the adapter, which is why the first attempt
     // produced no text at all.
     const messages = [
-        { role: 'user', content: [{ type: 'text', text: buildUserPrompt(files, patch, staged) }] },
+        { role: 'user', content: [{ type: 'text', text: buildUserPrompt(files, patch, staged, examples) }] },
     ];
     const baseOptions = {
         messages,
@@ -158,12 +218,15 @@ export async function generateCommitMessage(ctx, cwd, sessionId) {
         const raw = error instanceof Error ? error.message : String(error);
         throw new GitError(`生成提交消息失败：${friendlyFailure(raw, route)}`, 502);
     }
-    const message = cleanMessage(text);
-    if (message === '') {
+    const cleaned = cleanMessage(text);
+    if (cleaned === '') {
         throw new GitError(failure === ''
             ? `模型（${route.provider}/${route.model}）没有返回文本，可能只产出了 reasoning 或被上限截断`
             : `生成提交消息失败：${friendlyFailure(failure, route)}`, 502);
     }
+    // Last-resort guarantee: even if the model ignored the format rules, the
+    // subject still carries a Conventional Commits type so history stays uniform.
+    const message = ensureConventional(cleaned, examples);
     return { message, provider: route.provider, model: route.model };
 }
 function describeFinishError(reason) {
