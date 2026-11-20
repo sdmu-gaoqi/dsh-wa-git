@@ -76,6 +76,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-native-command": "0.2.2-rc.1"
   },
+  "repository": "github:sdmu-gaoqi/dsh-wa-git",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
